@@ -1278,58 +1278,137 @@ def _require_purpose_of_visit(value: str, *, max_length: int = 2000) -> str:
 
 
 
-def _get_or_create_manual_customer_for_kam(*, name: str, kam_user: User) -> Tuple[Customer, bool]:
+def _get_or_create_manual_customer_for_kam(
+    *,
+    name: str,
+    kam_user: User,
+    company: str = "",
+    location: str = "",
+    city: str = "",
+    state: str = "",
+    contact_person: str = "",
+    phone: str = "",
+    email: str = "",
+    gst: str = "",
+) -> Tuple[Customer, bool]:
     """
-    Create/map one manually entered customer without duplicating customer data.
-    Reuses Customer + KAMAssignment only.
+    Create or reuse one KAM-owned manually entered customer.
+
+    Production rules:
+    - Never attaches a KAM's new visit to another KAM's customer.
+    - Reuses an existing customer only when it is already owned/assigned/created by the same KAM.
+    - Creates a new MANUAL customer when no same-KAM match exists.
+    - Assigns Customer.kam, Customer.primary_kam, Customer.created_by and KAMAssignment to the creator.
+    - Updates only blank customer fields to preserve existing customer master data.
     """
     clean_name = (name or "").strip()
+    clean_company = (company or "").strip()
+    clean_location = (location or "").strip()
+    clean_city = (city or "").strip()
+    clean_state = (state or "").strip()
+    clean_contact = (contact_person or "").strip()
+    clean_phone = (phone or "").strip()
+    clean_email = (email or "").strip()
+    clean_gst = (gst or "").strip().upper()
 
     if not clean_name:
         raise ValueError("Customer name is required.")
 
+    if not kam_user or not getattr(kam_user, "id", None):
+        raise ValueError("KAM owner is required for new customer creation.")
+
+    address_parts = [part for part in [clean_location, clean_city, clean_state] if part]
+    clean_address = ", ".join(address_parts)
+
     with transaction.atomic():
-        customer_obj = (
-            Customer.objects
-            .select_for_update()
-            .filter(name__iexact=clean_name)
-            .first()
+        assigned_customer_ids = (
+            KAMAssignment.objects
+            .filter(kam=kam_user)
+            .filter(Q(active_to__isnull=True) | Q(active_to__gte=timezone.localdate()))
+            .values_list("customer_id", flat=True)
         )
+
+        same_kam_scope = (
+            Q(kam=kam_user)
+            | Q(primary_kam=kam_user)
+            | Q(created_by=kam_user)
+            | Q(id__in=assigned_customer_ids)
+        )
+
+        customer_obj = None
+
+        if clean_gst:
+            customer_obj = (
+                Customer.objects
+                .select_for_update()
+                .filter(same_kam_scope, gst_number__iexact=clean_gst)
+                .order_by("id")
+                .first()
+            )
+
+        if customer_obj is None:
+            customer_obj = (
+                Customer.objects
+                .select_for_update()
+                .filter(same_kam_scope, name__iexact=clean_name)
+                .order_by("id")
+                .first()
+            )
 
         created = False
 
-        if not customer_obj:
+        if customer_obj is None:
             customer_obj = Customer.objects.create(
                 name=clean_name,
+                gst_number=clean_gst or None,
+                contact_person=clean_contact or None,
+                address=clean_address or None,
+                email=clean_email or None,
+                mobile=clean_phone or None,
+                type=clean_company or None,
                 kam=kam_user,
                 primary_kam=kam_user,
                 source=Customer.SOURCE_MANUAL,
                 created_by=kam_user,
             )
             created = True
+        else:
+            changed_fields = []
 
-        changed_fields = []
+            if not customer_obj.kam_id:
+                customer_obj.kam = kam_user
+                changed_fields.append("kam")
 
-        if hasattr(customer_obj, "kam_id") and not customer_obj.kam_id:
-            customer_obj.kam = kam_user
-            changed_fields.append("kam")
+            if not customer_obj.primary_kam_id:
+                customer_obj.primary_kam = kam_user
+                changed_fields.append("primary_kam")
 
-        if hasattr(customer_obj, "primary_kam_id") and not customer_obj.primary_kam_id:
-            customer_obj.primary_kam = kam_user
-            changed_fields.append("primary_kam")
+            if hasattr(customer_obj, "created_by_id") and not customer_obj.created_by_id:
+                customer_obj.created_by = kam_user
+                changed_fields.append("created_by")
 
-        if hasattr(customer_obj, "source") and not getattr(customer_obj, "source", None):
-            customer_obj.source = Customer.SOURCE_MANUAL
-            changed_fields.append("source")
+            if hasattr(customer_obj, "source") and not getattr(customer_obj, "source", None):
+                customer_obj.source = Customer.SOURCE_MANUAL
+                changed_fields.append("source")
 
-        if hasattr(customer_obj, "created_by_id") and not getattr(customer_obj, "created_by_id", None):
-            customer_obj.created_by = kam_user
-            changed_fields.append("created_by")
+            blank_updates = {
+                "gst_number": clean_gst or None,
+                "contact_person": clean_contact or None,
+                "address": clean_address or None,
+                "email": clean_email or None,
+                "mobile": clean_phone or None,
+                "type": clean_company or None,
+            }
 
-        if changed_fields:
-            if hasattr(customer_obj, "updated_at"):
-                changed_fields.append("updated_at")
-            customer_obj.save(update_fields=changed_fields)
+            for field_name, field_value in blank_updates.items():
+                if field_value and not (getattr(customer_obj, field_name, None) or ""):
+                    setattr(customer_obj, field_name, field_value)
+                    changed_fields.append(field_name)
+
+            if changed_fields:
+                if hasattr(customer_obj, "updated_at"):
+                    changed_fields.append("updated_at")
+                customer_obj.save(update_fields=sorted(set(changed_fields)))
 
         KAMAssignment.objects.get_or_create(
             customer=customer_obj,
@@ -1338,7 +1417,6 @@ def _get_or_create_manual_customer_for_kam(*, name: str, kam_user: User) -> Tupl
         )
 
     return customer_obj, created
-
 
 def _visit_plan_customer_names(plan: "VisitPlan") -> List[str]:
     names = []
@@ -4870,7 +4948,14 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
                     or request.POST.getlist("batch_manual_customer[]")
                 )
             ]
+            manual_row_companies = request.POST.getlist("batch_manual_company[]")
             manual_row_locations = request.POST.getlist("batch_manual_location[]")
+            manual_row_cities = request.POST.getlist("batch_manual_city[]")
+            manual_row_states = request.POST.getlist("batch_manual_state[]")
+            manual_row_contact_persons = request.POST.getlist("batch_manual_contact_person[]")
+            manual_row_phones = request.POST.getlist("batch_manual_phone[]")
+            manual_row_emails = request.POST.getlist("batch_manual_email[]")
+            manual_row_gsts = request.POST.getlist("batch_manual_gst[]")
             manual_row_purposes = request.POST.getlist("batch_manual_purpose[]")
             manual_row_expected_sales = request.POST.getlist("batch_manual_expected_sales_mt[]")
             manual_row_expected_collections = request.POST.getlist("batch_manual_expected_collection[]")
@@ -4881,9 +4966,44 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
                 if not manual_name:
                     continue
 
+                manual_company = (
+                    manual_row_companies[idx]
+                    if idx < len(manual_row_companies)
+                    else ""
+                ).strip()
                 manual_location = (
                     manual_row_locations[idx]
                     if idx < len(manual_row_locations)
+                    else ""
+                ).strip()
+                manual_city = (
+                    manual_row_cities[idx]
+                    if idx < len(manual_row_cities)
+                    else ""
+                ).strip()
+                manual_state = (
+                    manual_row_states[idx]
+                    if idx < len(manual_row_states)
+                    else ""
+                ).strip()
+                manual_contact_person = (
+                    manual_row_contact_persons[idx]
+                    if idx < len(manual_row_contact_persons)
+                    else ""
+                ).strip()
+                manual_phone = (
+                    manual_row_phones[idx]
+                    if idx < len(manual_row_phones)
+                    else ""
+                ).strip()
+                manual_email = (
+                    manual_row_emails[idx]
+                    if idx < len(manual_row_emails)
+                    else ""
+                ).strip()
+                manual_gst = (
+                    manual_row_gsts[idx]
+                    if idx < len(manual_row_gsts)
                     else ""
                 ).strip()
                 manual_purpose = (
@@ -4942,6 +5062,14 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
                     manual_customer, created = _get_or_create_manual_customer_for_kam(
                         name=manual_name,
                         kam_user=user,
+                        company=manual_company,
+                        location=manual_location,
+                        city=manual_city,
+                        state=manual_state,
+                        contact_person=manual_contact_person,
+                        phone=manual_phone,
+                        email=manual_email,
+                        gst=manual_gst,
                     )
 
                     if manual_customer.id not in selected_ids:
@@ -4979,7 +5107,7 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
                 if not selected_ids:
                     messages.error(
                         request,
-                        "Select at least one customer or add a manual customer.",
+                        "Please select at least one Existing Customer or add at least one New Customer.",
                     )
                     return redirect(reverse("kam:plan"))
 

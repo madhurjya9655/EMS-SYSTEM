@@ -354,7 +354,7 @@ class SingleVisitForm(forms.ModelForm):
             if not customer and not selected_customer_ids and not manual_customer:
                 self.add_error(
                     "customer",
-                    "Customer is required. Select one or more existing customers or enter a new one.",
+                    "Please select at least one Existing Customer or add at least one New Customer.",
                 )
 
             if counterparty_name:

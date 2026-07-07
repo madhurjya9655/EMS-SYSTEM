@@ -40,6 +40,19 @@
   .selected-chip-wrap, .kam-chip-wrap { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
   .kam-chip { display: inline-flex; align-items: center; gap: 7px; max-width: 100%; border-radius: 999px; padding: 7px 10px; background: #eef2ff; color: #3730a3; font-size: 12px; font-weight: 800; border: 1px solid #c7d2fe; }
   .kam-chip button { width: 18px; height: 18px; border: 0; border-radius: 999px; background: #c7d2fe; color: #312e81; line-height: 18px; padding: 0; }
+
+  .customer-section-title { margin: 0 0 8px; font-size: 15px; font-weight: 900; color: #0f172a; }
+  .customer-source-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+  .customer-source-card { border: 1px solid #d8e0ec; border-radius: 16px; padding: 14px; background: #ffffff; }
+  .customer-source-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; color: #0f172a; font-weight: 900; }
+  .customer-source-head .radio-dot { width: 16px; height: 16px; border: 2px solid #2563eb; border-radius: 999px; display: inline-flex; align-items: center; justify-content: center; }
+  .customer-source-head .radio-dot::after { content: ""; width: 6px; height: 6px; border-radius: 999px; background: #2563eb; display: block; }
+  .new-customer-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .new-customer-grid .full { grid-column: 1 / -1; }
+  .new-customer-grid input { width: 100%; min-height: 40px; border: 1px solid #d8e0ec; border-radius: 10px; padding: 8px 10px; font-size: 13px; }
+  .new-customer-grid label { margin: 0 0 5px; color: #475569; font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .04em; }
+  .customer-validation-error { display: none; margin-top: 10px; color: #dc2626; font-size: 12px; font-weight: 700; }
+  @media (max-width: 992px) { .customer-source-grid { grid-template-columns: 1fr; } }
   .manual-customer-box { margin-top: 14px; border-top: 1px dashed #d8e0ec; padding-top: 14px; }
   .manual-customer-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
   .manual-customer-row .form-control { flex: 1 1 320px; }
@@ -149,32 +162,78 @@
           <div class="kam-help">Mandatory. This is copied into every selected customer row and can be edited per customer if needed.</div>
         </div>
 
-        <div class="kam-field kam-field-wide" id="customerModeWrap">
-          <label class="kam-label">Existing Customers <span class="required">*</span></label>
-          <div class="customer-picker" id="customerPicker">
-            <input type="search" class="customer-search" id="customerSearch" placeholder="Search existing customers by name, code or location">
-            <div class="selected-chip-wrap" id="selectedCustomerChips"></div>
-            <div id="selectedCustomerInputs"></div>
-            <div class="customer-options" id="customerOptions">
-              {% for customer in customers %}
-                <button type="button" class="customer-option" data-customer-id="{{ customer.id }}" data-customer-name="{{ customer.name|escape }}" data-customer-code="{{ customer.code|default:''|escape }}" data-customer-location="{{ customer.address|default:''|escape }}" data-search="{{ customer.name|default:''|lower }} {{ customer.code|default:''|lower }} {{ customer.address|default:''|lower }}">
-                  <span class="name">{{ customer.name }}</span>
-                  <span class="meta">{{ customer.code|default:"No code" }}{% if customer.address %} · {{ customer.address|truncatechars:80 }}{% endif %}</span>
-                </button>
-              {% empty %}
-                <div class="p-3 text-muted small">No assigned customers found. Add a new customer below or check assignment sync.</div>
-              {% endfor %}
-            </div>
-          </div>
-          {% if batch_form.customers.errors %}<div class="kam-error">{{ batch_form.customers.errors|join:", " }}</div>{% endif %}
+        {% url 'kam:customer_create_manual' as customer_create_url %}
+        <div class="kam-field kam-field-wide" id="customerModeWrap" data-create-customer-url="{{ customer_create_url }}">
+          <h3 class="customer-section-title">Customer Selection</h3>
+          <div class="kam-help mb-2">You may either select existing customers, add a new customer, or use both.</div>
+          <div class="customer-validation-error" id="customerValidationError">Please select at least one Existing Customer or add at least one New Customer.</div>
 
-          <div class="manual-customer-box">
-            <label class="kam-label" for="manualCustomerInput">New Customer</label>
-            <div class="manual-customer-row">
-              <input type="text" id="manualCustomerInput" class="form-control" maxlength="255" autocomplete="off" placeholder="Optional: Future Metal Pvt Ltd">
-              <button type="button" class="btn btn-outline-primary" id="addManualCustomerBtn"><i class="fas fa-user-plus me-1"></i>Add New Customer Row</button>
+          <div class="customer-source-grid">
+            <div class="customer-source-card">
+              <div class="customer-source-head"><span class="radio-dot"></span><span>Existing Customer(s)</span></div>
+              <div class="customer-picker" id="customerPicker">
+                <input type="search" class="customer-search" id="customerSearch" placeholder="Search existing customers by name, code or location">
+                <div class="selected-chip-wrap" id="selectedCustomerChips"></div>
+                <div id="selectedCustomerInputs"></div>
+                <div class="customer-options" id="customerOptions">
+                  {% for customer in customers %}
+                    <button type="button" class="customer-option" data-customer-id="{{ customer.id }}" data-customer-name="{{ customer.name|escape }}" data-customer-code="{{ customer.code|default:''|escape }}" data-customer-location="{{ customer.address|default:''|escape }}" data-search="{{ customer.name|default:''|lower }} {{ customer.code|default:''|lower }} {{ customer.address|default:''|lower }}">
+                      <span class="name">{{ customer.name }}</span>
+                      <span class="meta">{{ customer.code|default:"No code" }}{% if customer.address %} · {{ customer.address|truncatechars:80 }}{% endif %}</span>
+                    </button>
+                  {% empty %}
+                    <div class="p-3 text-muted small">No assigned customers found. Add a new customer below or check assignment sync.</div>
+                  {% endfor %}
+                </div>
+              </div>
+              {% if batch_form.customers.errors %}<div class="kam-error">{{ batch_form.customers.errors|join:", " }}</div>{% endif %}
             </div>
-            <div class="kam-help">Optional. This creates a new customer row in the Bulk Visit table and maps the customer to the KAM after save.</div>
+
+            <div class="customer-source-card">
+              <div class="customer-source-head"><span class="radio-dot"></span><span>Add New Customer</span></div>
+              <div class="new-customer-grid">
+                <div class="full">
+                  <label for="manualCustomerInput">Customer Name</label>
+                  <input type="text" id="manualCustomerInput" maxlength="255" autocomplete="off" placeholder="ABC Industries Pvt Ltd">
+                </div>
+                <div>
+                  <label for="manualCustomerCompany">Company</label>
+                  <input type="text" id="manualCustomerCompany" maxlength="64" autocomplete="off" placeholder="Company">
+                </div>
+                <div>
+                  <label for="manualCustomerLocation">Location</label>
+                  <input type="text" id="manualCustomerLocation" maxlength="255" autocomplete="off" placeholder="Plant / area / address">
+                </div>
+                <div>
+                  <label for="manualCustomerCity">City</label>
+                  <input type="text" id="manualCustomerCity" maxlength="80" autocomplete="off" placeholder="City">
+                </div>
+                <div>
+                  <label for="manualCustomerState">State</label>
+                  <input type="text" id="manualCustomerState" maxlength="80" autocomplete="off" placeholder="State">
+                </div>
+                <div>
+                  <label for="manualCustomerContact">Contact Person</label>
+                  <input type="text" id="manualCustomerContact" maxlength="128" autocomplete="off" placeholder="Contact person">
+                </div>
+                <div>
+                  <label for="manualCustomerPhone">Phone</label>
+                  <input type="text" id="manualCustomerPhone" maxlength="32" autocomplete="off" placeholder="Phone">
+                </div>
+                <div>
+                  <label for="manualCustomerEmail">Email</label>
+                  <input type="email" id="manualCustomerEmail" maxlength="254" autocomplete="off" placeholder="email@example.com">
+                </div>
+                <div>
+                  <label for="manualCustomerGst">GST (Optional)</label>
+                  <input type="text" id="manualCustomerGst" maxlength="32" autocomplete="off" placeholder="GST number">
+                </div>
+              </div>
+              <div class="manual-customer-row mt-3">
+                <button type="button" class="btn btn-outline-primary" id="addManualCustomerBtn"><i class="fas fa-user-plus me-1"></i>Save with Visit</button>
+              </div>
+              <div class="kam-help">The new customer is created under your KAM ownership immediately, added to the Existing Customer dropdown, and linked to this visit line.</div>
+            </div>
           </div>
         </div>
       </div>
@@ -276,7 +335,18 @@
   const emptyState = document.getElementById("bulkEmptyState");
   const addManualCustomerBtn = document.getElementById("addManualCustomerBtn");
   const manualCustomerInput = document.getElementById("manualCustomerInput");
+  const manualCustomerCompany = document.getElementById("manualCustomerCompany");
+  const manualCustomerLocation = document.getElementById("manualCustomerLocation");
+  const manualCustomerCity = document.getElementById("manualCustomerCity");
+  const manualCustomerState = document.getElementById("manualCustomerState");
+  const manualCustomerContact = document.getElementById("manualCustomerContact");
+  const manualCustomerPhone = document.getElementById("manualCustomerPhone");
+  const manualCustomerEmail = document.getElementById("manualCustomerEmail");
+  const manualCustomerGst = document.getElementById("manualCustomerGst");
+  const customerValidationError = document.getElementById("customerValidationError");
+  const createCustomerUrl = customerModeWrap ? (customerModeWrap.getAttribute("data-create-customer-url") || "") : "";
   const batchPurposeField = document.getElementById("id_batch-purpose") || document.getElementById("id_purpose");
+  const bulkVisitForm = document.getElementById("bulkVisitForm");
   const selected = new Map();
   let manualCounter = 0;
 
@@ -292,6 +362,108 @@
   function isCustomerCategory(value) {
     const normalized = String(value || "").toUpperCase();
     return normalized === "CUSTOMER" || normalized === "CUSTOMER_VISIT";
+  }
+
+  function getCsrfToken() {
+    const input = document.querySelector('input[name="csrfmiddlewaretoken"]');
+    return input ? input.value : "";
+  }
+
+  function buildSearchText(customer) {
+    return [customer.name, customer.code, customer.address, customer.location]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
+  }
+
+  function upsertCustomerOption(customer) {
+    if (!optionsWrap || !customer || !customer.id) return;
+
+    const id = String(customer.id);
+    let button = optionsWrap.querySelector('[data-customer-id="' + CSS.escape(id) + '"]');
+
+    if (!button) {
+      button = document.createElement("button");
+      button.type = "button";
+      button.className = "customer-option";
+      button.setAttribute("data-customer-id", id);
+
+      const nameSpan = document.createElement("span");
+      nameSpan.className = "name";
+
+      const metaSpan = document.createElement("span");
+      metaSpan.className = "meta";
+
+      button.appendChild(nameSpan);
+      button.appendChild(metaSpan);
+      optionsWrap.appendChild(button);
+
+      button.addEventListener("click", function () {
+        const customerData = {
+          id: button.getAttribute("data-customer-id"),
+          name: button.getAttribute("data-customer-name") || "Customer",
+          code: button.getAttribute("data-customer-code") || "",
+          location: button.getAttribute("data-customer-location") || "",
+          address: button.getAttribute("data-customer-location") || ""
+        };
+        if (customerData.id) {
+          selected.set(customerData.id, customerData);
+          if (customerValidationError) customerValidationError.style.display = "none";
+          renderSelected();
+          filterOptions();
+        }
+      });
+    }
+
+    const name = customer.name || "Customer";
+    const code = customer.code || "";
+    const address = customer.address || customer.location || "";
+    const meta = (code || "No code") + (address ? " · " + address.substring(0, 80) : "");
+
+    button.setAttribute("data-customer-name", name);
+    button.setAttribute("data-customer-code", code);
+    button.setAttribute("data-customer-location", address);
+    button.setAttribute("data-search", buildSearchText(customer));
+    button.querySelector(".name").textContent = name;
+    button.querySelector(".meta").textContent = meta;
+  }
+
+  async function createManualCustomer(customer) {
+    if (!createCustomerUrl) return null;
+
+    const payload = new FormData();
+    payload.append("name", customer.name || "");
+    payload.append("company", customer.company || "");
+    payload.append("location", customer.location || "");
+    payload.append("city", customer.city || "");
+    payload.append("state", customer.state || "");
+    payload.append("contact_person", customer.contact || "");
+    payload.append("phone", customer.phone || "");
+    payload.append("email", customer.email || "");
+    payload.append("gst", customer.gst || "");
+
+    const response = await fetch(createCustomerUrl, {
+      method: "POST",
+      body: payload,
+      credentials: "same-origin",
+      headers: {
+        "X-CSRFToken": getCsrfToken(),
+        "X-Requested-With": "XMLHttpRequest"
+      }
+    });
+
+    let data = null;
+    try {
+      data = await response.json();
+    } catch (err) {
+      data = null;
+    }
+
+    if (!response.ok || !data || !data.ok) {
+      throw new Error((data && data.error) || "Could not create the new customer.");
+    }
+
+    return data.customer;
   }
 
   function rowHtml(customer) {
@@ -313,11 +485,31 @@
       </tr>`;
   }
 
-  function manualRowHtml(index, customerName) {
+  function manualRowHtml(index, customer) {
+    const name = customer.name || "";
+    const company = customer.company || "";
+    const location = customer.location || "";
+    const city = customer.city || "";
+    const state = customer.state || "";
+    const contact = customer.contact || "";
+    const phone = customer.phone || "";
+    const email = customer.email || "";
+    const gst = customer.gst || "";
+    const meta = [company, location, city, state].filter(Boolean).join(" · ");
     return `
       <tr data-manual-row="${index}">
-        <td><input class="form-control" type="text" name="batch_manual_customer_name[]" maxlength="255" placeholder="New customer name" value="${esc(customerName || "")}" required></td>
-        <td><textarea class="form-control" name="batch_manual_location[]" rows="2" placeholder="Location" required></textarea></td>
+        <td>
+          <input class="form-control" type="text" name="batch_manual_customer_name[]" maxlength="255" placeholder="New customer name" value="${esc(name)}" required>
+          <input type="hidden" name="batch_manual_company[]" value="${esc(company)}">
+          <input type="hidden" name="batch_manual_city[]" value="${esc(city)}">
+          <input type="hidden" name="batch_manual_state[]" value="${esc(state)}">
+          <input type="hidden" name="batch_manual_contact_person[]" value="${esc(contact)}">
+          <input type="hidden" name="batch_manual_phone[]" value="${esc(phone)}">
+          <input type="hidden" name="batch_manual_email[]" value="${esc(email)}">
+          <input type="hidden" name="batch_manual_gst[]" value="${esc(gst)}">
+          <div class="bulk-customer-meta mt-1">${esc(meta || "New customer")}</div>
+        </td>
+        <td><textarea class="form-control" name="batch_manual_location[]" rows="2" placeholder="Location" required>${esc(location)}</textarea></td>
         <td><textarea class="form-control bulk-line-purpose" name="batch_manual_purpose[]" rows="2" placeholder="Purpose of Visit" required>${esc(batchPurposeField ? batchPurposeField.value : "")}</textarea></td>
         <td><input class="form-control" type="number" step="0.001" min="0" name="batch_manual_expected_sales_mt[]" placeholder="0.000"></td>
         <td><input class="form-control" type="number" step="0.01" min="0" name="batch_manual_expected_collection[]" placeholder="0.00"></td>
@@ -328,7 +520,7 @@
   function renderSelected() {
     chipsWrap.innerHTML = "";
     hiddenWrap.innerHTML = "";
-    linesBody.innerHTML = "";
+    linesBody.querySelectorAll("tr[data-row-id]").forEach(function (row) { row.remove(); });
 
     selected.forEach(function (customer, id) {
       const chip = document.createElement("span");
@@ -385,6 +577,7 @@
         };
         if (id) {
           selected.set(id, customer);
+          if (customerValidationError) customerValidationError.style.display = "none";
           renderSelected();
           filterOptions();
         }
@@ -414,12 +607,70 @@
   }
 
   if (addManualCustomerBtn) {
-    addManualCustomerBtn.addEventListener("click", function () {
-      manualCounter += 1;
+    addManualCustomerBtn.addEventListener("click", async function () {
       const manualName = manualCustomerInput ? manualCustomerInput.value.trim() : "";
-      linesBody.insertAdjacentHTML("beforeend", manualRowHtml(manualCounter, manualName));
-      if (manualCustomerInput) manualCustomerInput.value = "";
-      syncEmptyState();
+      if (!manualName) {
+        if (customerValidationError) {
+          customerValidationError.style.display = "block";
+          customerValidationError.textContent = "Customer Name is required to add a New Customer.";
+        }
+        if (manualCustomerInput) manualCustomerInput.focus();
+        return;
+      }
+
+      const manualCustomer = {
+        name: manualName,
+        company: manualCustomerCompany ? manualCustomerCompany.value.trim() : "",
+        location: manualCustomerLocation ? manualCustomerLocation.value.trim() : "",
+        city: manualCustomerCity ? manualCustomerCity.value.trim() : "",
+        state: manualCustomerState ? manualCustomerState.value.trim() : "",
+        contact: manualCustomerContact ? manualCustomerContact.value.trim() : "",
+        phone: manualCustomerPhone ? manualCustomerPhone.value.trim() : "",
+        email: manualCustomerEmail ? manualCustomerEmail.value.trim() : "",
+        gst: manualCustomerGst ? manualCustomerGst.value.trim() : ""
+      };
+
+      addManualCustomerBtn.disabled = true;
+      const originalButtonHtml = addManualCustomerBtn.innerHTML;
+      addManualCustomerBtn.innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i>Saving Customer...';
+
+      try {
+        const createdCustomer = await createManualCustomer(manualCustomer);
+
+        if (createdCustomer && createdCustomer.id) {
+          const id = String(createdCustomer.id);
+          const normalizedCustomer = {
+            id: id,
+            name: createdCustomer.name || manualCustomer.name,
+            code: createdCustomer.code || "",
+            address: createdCustomer.address || createdCustomer.location || manualCustomer.location || "",
+            location: createdCustomer.address || createdCustomer.location || manualCustomer.location || ""
+          };
+
+          upsertCustomerOption(normalizedCustomer);
+          selected.set(id, normalizedCustomer);
+          renderSelected();
+          filterOptions();
+        } else {
+          manualCounter += 1;
+          linesBody.insertAdjacentHTML("beforeend", manualRowHtml(manualCounter, manualCustomer));
+        }
+
+        [manualCustomerInput, manualCustomerCompany, manualCustomerLocation, manualCustomerCity, manualCustomerState, manualCustomerContact, manualCustomerPhone, manualCustomerEmail, manualCustomerGst].forEach(function (field) {
+          if (field) field.value = "";
+        });
+        if (customerValidationError) customerValidationError.style.display = "none";
+        syncEmptyState();
+      } catch (err) {
+        if (customerValidationError) {
+          customerValidationError.style.display = "block";
+          customerValidationError.textContent = err && err.message ? err.message : "Could not create the new customer.";
+        }
+        if (manualCustomerInput) manualCustomerInput.focus();
+      } finally {
+        addManualCustomerBtn.disabled = false;
+        addManualCustomerBtn.innerHTML = originalButtonHtml;
+      }
     });
   }
 
@@ -450,6 +701,33 @@
     linesBody.addEventListener("input", function (event) {
       if (event.target && event.target.classList.contains("bulk-line-purpose")) {
         event.target.dataset.userEdited = "1";
+      }
+    });
+  }
+
+
+  if (bulkVisitForm) {
+    bulkVisitForm.addEventListener("submit", function (event) {
+      const hasRows = linesBody && linesBody.querySelectorAll("tr").length > 0;
+      const pendingManualName = manualCustomerInput && manualCustomerInput.value.trim();
+
+      if (!hasRows && !pendingManualName) {
+        event.preventDefault();
+        if (customerValidationError) {
+          customerValidationError.style.display = "block";
+          customerValidationError.textContent = "Please select at least one Existing Customer or add at least one New Customer.";
+        }
+        if (customerModeWrap) customerModeWrap.scrollIntoView({ behavior: "smooth", block: "center" });
+        return;
+      }
+
+      if (pendingManualName && addManualCustomerBtn) {
+        event.preventDefault();
+        if (customerValidationError) {
+          customerValidationError.style.display = "block";
+          customerValidationError.textContent = "Please click Save with Visit to create the New Customer before submitting.";
+        }
+        addManualCustomerBtn.focus();
       }
     });
   }

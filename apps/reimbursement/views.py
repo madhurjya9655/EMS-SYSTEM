@@ -1088,10 +1088,7 @@ class ManagerQueueView(LoginRequiredMixin, PermissionRequiredMixin, ListView):
             ReimbursementRequest.objects.filter(
                 status=ReimbursementRequest.Status.PENDING_MANAGER
             )
-            .filter(
-                Q(manager=user)
-                | Q(created_by__reimbursement_approver_mapping__managers=user)
-            )
+            .filter(manager=user)
             .select_related("created_by", "manager", "management")
             .distinct()
             .order_by("-created_at")
@@ -1112,10 +1109,7 @@ class ManagerReviewView(LoginRequiredMixin, PermissionRequiredMixin, UpdateView)
             ReimbursementRequest.objects.filter(
                 status=ReimbursementRequest.Status.PENDING_MANAGER
             )
-            .filter(
-                Q(manager=user)
-                | Q(created_by__reimbursement_approver_mapping__managers=user)
-            )
+            .filter(manager=user)
             .select_related("created_by", "manager", "management")
             .distinct()
         )
@@ -1197,7 +1191,7 @@ class ManagementQueueView(LoginRequiredMixin, PermissionRequiredMixin, ListView)
             ReimbursementRequest.objects.filter(
                 status=ReimbursementRequest.Status.PENDING_MANAGEMENT
             )
-            .filter(Q(management=user) | Q(manager=user) | Q(created_by=user))
+            .filter(management=user)
             .select_related("created_by", "manager", "management")
             .order_by("-created_at")
         )
@@ -1216,7 +1210,7 @@ class ManagementReviewView(LoginRequiredMixin, PermissionRequiredMixin, UpdateVi
             ReimbursementRequest.objects.filter(
                 status=ReimbursementRequest.Status.PENDING_MANAGEMENT
             )
-            .filter(Q(management=user) | Q(manager=user) | Q(created_by=user))
+            .filter(management=user)
             .select_related("created_by", "manager", "management")
         )
 
@@ -2476,10 +2470,24 @@ def download_bank_document(
 # ---------------------------------------------------------------------------
 
 
+
 @csrf_exempt
 def reimbursement_email_action(request):
+    """
+    Secure email action endpoint.
+
+    Production rules enforced here:
+    - The user must be logged in.
+    - The logged-in user must be the currently assigned approver for the stage.
+    - The request must still be pending at the matching active stage.
+    - The signed token must match request, role, approver, and stage.
+    - Duplicate clicks after processing do not update the database again.
+    """
     from django.core import signing
-    from django.core.signing import BadSignature
+    from django.core.signing import BadSignature, SignatureExpired
+
+    if not getattr(request.user, "is_authenticated", False):
+        return redirect_to_login(request.get_full_path())
 
     token = request.GET.get("t") or request.POST.get("t")
     if not token:
@@ -2487,97 +2495,161 @@ def reimbursement_email_action(request):
 
     try:
         data = signing.loads(token, salt=EMAIL_ACTION_SALT, max_age=7 * 24 * 3600)
+    except SignatureExpired:
+        return HttpResponseBadRequest("Invalid or expired link.")
     except BadSignature:
         return HttpResponseBadRequest("Invalid or expired link.")
 
     req_id = data.get("req_id")
     role = data.get("role")
     decision = data.get("decision")
+    token_approver_id = data.get("approver_id")
+    token_stage = data.get("stage") or data.get("status")
 
     if (
         not req_id
         or role not in ("manager", "management")
         or decision not in ("approved", "rejected", "clarification")
+        or not token_approver_id
+        or not token_stage
     ):
         return HttpResponseBadRequest("Malformed token.")
 
-    req = get_object_or_404(ReimbursementRequest, pk=req_id)
-    prev_status = req.status
-    now = timezone.now()
+    try:
+        token_approver_id = int(token_approver_id)
+    except Exception:
+        return HttpResponseBadRequest("Malformed token.")
 
-    if role == "manager":
-        settings_obj = ReimbursementSettings.get_solo()
-        req.manager_decision = decision
-        base_comment = req.manager_comment or ""
-        note = "Decision recorded via email link."
-        req.manager_comment = (base_comment + "\n" if base_comment else "") + note
+    already_processed_html = """
+<html>
+  <body style="font-family:system-ui,Segoe UI,Helvetica,Arial,sans-serif;">
+    <div style="max-width:520px;margin:40px auto;padding:24px;border-radius:10px;
+                border:1px solid #e5e7eb;background:#ffffff;text-align:center;">
+      <h2 style="margin-top:0;color:#374151;">Already processed</h2>
+      <p style="margin:12px 0;">This reimbursement has already been processed.</p>
+      <p style="margin:12px 0;font-size:13px;color:#6b7280;">
+        No further action was taken.
+      </p>
+    </div>
+  </body>
+</html>
+"""
 
-        if decision == "approved":
-            if settings_obj.require_management_approval:
-                req.status = ReimbursementRequest.Status.PENDING_MANAGEMENT
+    with transaction.atomic():
+        req = get_object_or_404(
+            ReimbursementRequest.objects.select_for_update().select_related(
+                "created_by", "manager", "management"
+            ),
+            pk=req_id,
+        )
+
+        if role == "manager":
+            expected_status = ReimbursementRequest.Status.PENDING_MANAGER
+            assigned_user_id = req.manager_id
+            existing_decision = (req.manager_decision or "").strip()
+            decided_at = req.manager_decided_at
+        else:
+            expected_status = ReimbursementRequest.Status.PENDING_MANAGEMENT
+            assigned_user_id = req.management_id
+            existing_decision = (req.management_decision or "").strip()
+            decided_at = req.management_decided_at
+
+        # Duplicate/stale link prevention: do not mutate finalized or moved requests.
+        if (
+            req.status != expected_status
+            or req.status in ReimbursementRequest.final_statuses()
+            or existing_decision
+            or decided_at
+        ):
+            return HttpResponse(already_processed_html, status=409)
+
+        # Strict assigned-approver validation. Admin/Finance/HR/other users are blocked unless assigned.
+        if (
+            not assigned_user_id
+            or request.user.id != assigned_user_id
+            or token_approver_id != assigned_user_id
+            or token_stage != expected_status
+        ):
+            return HttpResponseForbidden(
+                "You are not authorized to approve this reimbursement request."
+            )
+
+        prev_status = req.status
+        now = timezone.now()
+
+        if role == "manager":
+            settings_obj = ReimbursementSettings.get_solo()
+            req.manager_decision = decision
+            base_comment = req.manager_comment or ""
+            note = "Decision recorded via secure email link."
+            req.manager_comment = (base_comment + "\n" if base_comment else "") + note
+
+            if decision == "approved":
+                if settings_obj.require_management_approval:
+                    req.status = ReimbursementRequest.Status.PENDING_MANAGEMENT
+                else:
+                    req.status = ReimbursementRequest.Status.PENDING_FINANCE
+            elif decision == "rejected":
+                req.status = ReimbursementRequest.Status.REJECTED
             else:
+                req.status = ReimbursementRequest.Status.CLARIFICATION_REQUIRED
+
+            req.manager_decided_at = now
+            req.save(
+                update_fields=[
+                    "status",
+                    "manager_decision",
+                    "manager_comment",
+                    "manager_decided_at",
+                    "updated_at",
+                ]
+            )
+
+            ReimbursementLog.log(
+                req,
+                ReimbursementLog.Action.STATUS_CHANGED
+                if decision != "approved"
+                else ReimbursementLog.Action.MANAGER_APPROVED,
+                actor=request.user,
+                message=f"Manager decision via secure email link: {decision}",
+                from_status=prev_status,
+                to_status=req.status,
+            )
+            _send_safe("send_reimbursement_manager_action", req, decision=decision)
+
+        else:
+            req.management_decision = decision
+            base_comment = req.management_comment or ""
+            note = "Decision recorded via secure email link."
+            req.management_comment = (base_comment + "\n" if base_comment else "") + note
+
+            if decision == "approved":
                 req.status = ReimbursementRequest.Status.PENDING_FINANCE
-        elif decision == "rejected":
-            req.status = ReimbursementRequest.Status.REJECTED
-        else:
-            req.status = ReimbursementRequest.Status.CLARIFICATION_REQUIRED
+            elif decision == "rejected":
+                req.status = ReimbursementRequest.Status.REJECTED
+            else:
+                req.status = ReimbursementRequest.Status.CLARIFICATION_REQUIRED
 
-        req.manager_decided_at = now
-        req.save(
-            update_fields=[
-                "status",
-                "manager_decision",
-                "manager_comment",
-                "manager_decided_at",
-                "updated_at",
-            ]
-        )
+            req.management_decided_at = now
+            req.save(
+                update_fields=[
+                    "status",
+                    "management_decision",
+                    "management_comment",
+                    "management_decided_at",
+                    "updated_at",
+                ]
+            )
 
-        ReimbursementLog.log(
-            req,
-            ReimbursementLog.Action.STATUS_CHANGED
-            if decision != "approved"
-            else ReimbursementLog.Action.MANAGER_APPROVED,
-            actor=req.manager,
-            message=f"Manager decision via email: {decision}",
-            from_status=prev_status,
-            to_status=req.status,
-        )
-        _send_safe("send_reimbursement_manager_action", req, decision=decision)
-
-    elif role == "management":
-        req.management_decision = decision
-        base_comment = req.management_comment or ""
-        note = "Decision recorded via email link."
-        req.management_comment = (base_comment + "\n" if base_comment else "") + note
-
-        if decision == "approved":
-            req.status = ReimbursementRequest.Status.PENDING_FINANCE
-        elif decision == "rejected":
-            req.status = ReimbursementRequest.Status.REJECTED
-        else:
-            req.status = ReimbursementRequest.Status.CLARIFICATION_REQUIRED
-
-        req.management_decided_at = now
-        req.save(
-            update_fields=[
-                "status",
-                "management_decision",
-                "management_comment",
-                "management_decided_at",
-                "updated_at",
-            ]
-        )
-
-        ReimbursementLog.log(
-            req,
-            ReimbursementLog.Action.STATUS_CHANGED,
-            actor=req.management,
-            message=f"Management decision via email: {decision}",
-            from_status=prev_status,
-            to_status=req.status,
-        )
-        _send_safe("send_reimbursement_management_action", req, decision=decision)
+            ReimbursementLog.log(
+                req,
+                ReimbursementLog.Action.STATUS_CHANGED,
+                actor=request.user,
+                message=f"Management decision via secure email link: {decision}",
+                from_status=prev_status,
+                to_status=req.status,
+            )
+            _send_safe("send_reimbursement_management_action", req, decision=decision)
 
     html = """
 <html>
@@ -2594,7 +2666,6 @@ def reimbursement_email_action(request):
 </html>
 """
     return HttpResponse(html)
-
 
 # ---------------------------------------------------------------------------
 # Legacy screens (kept for backwards compatibility)

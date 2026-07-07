@@ -458,48 +458,38 @@ def _management_emails() -> List[str]:
         return []
 
 
+
 def _manager_email_candidates(req: ReimbursementRequest) -> List[str]:
-    candidates: List[str] = []
+    """
+    Resolve the currently assigned reimbursement approver only.
+
+    Previous code merged approver_level1, req.manager, mapping.manager and
+    profile.team_leader. That produced duplicate approval emails, for example
+    one to the assigned approver and one to another manager. For approval mail,
+    req.manager is the authoritative assigned approver stored on the request.
+    """
     try:
-        settings_obj = _default_settings()
-        lvl1 = settings_obj.approver_level1()
-        if lvl1:
-            candidates.append(lvl1)
-
         if req.manager and getattr(req.manager, "email", None):
-            candidates.append((req.manager.email or "").strip())
-
-        mapping = ReimbursementApproverMapping.for_employee(req.created_by)
-        if mapping and mapping.manager and mapping.manager.email:
-            candidates.append((mapping.manager.email or "").strip())
-
-        profile = getattr(req.created_by, "profile", None)
-        if profile and getattr(profile, "team_leader", None) and profile.team_leader.email:
-            candidates.append((profile.team_leader.email or "").strip())
+            return _dedupe_preserve([(req.manager.email or "").strip()])
     except Exception:
-        logger.exception("Failed resolving manager email candidates for reimbursement #%s", req.id)
-
-    return _dedupe_preserve(candidates)
+        logger.exception("Failed resolving assigned manager for reimbursement #%s", req.id)
+    return []
 
 
 def _recipients_for_manager(req: ReimbursementRequest) -> _Recipients:
-    # NEW POLICY: Do not include admins here.
-    mgr_list = _manager_email_candidates(req)
-    return _Recipients(to=mgr_list, cc=[])
+    # Approval email TO must be the assigned approver only. Visibility CC is separate
+    # and has no approval authority.
+    return _Recipients(to=_manager_email_candidates(req), cc=[])
 
 
 def _recipients_for_management(req: ReimbursementRequest) -> _Recipients:
-    # NEW POLICY: Do not include admins here.
-    mgmt_list: List[str] = []
+    # Management approval email must go to the assigned management approver only. No CC.
     try:
         if req.management and getattr(req.management, "email", None):
-            mgmt_list.append((req.management.email or "").strip())
-        mgmt_list.extend(_management_emails())
+            return _Recipients(to=_dedupe_preserve([(req.management.email or "").strip()]), cc=[])
     except Exception:
-        logger.exception("Failed resolving management recipients for reimbursement #%s", req.id)
-
-    return _Recipients(to=_dedupe_preserve(mgmt_list), cc=[])
-
+        logger.exception("Failed resolving assigned management approver for reimbursement #%s", req.id)
+    return _Recipients(to=[], cc=[])
 
 def _recipients_for_finance(req: ReimbursementRequest) -> _Recipients:
     # NEW POLICY: Do not include admins here.
@@ -525,6 +515,18 @@ def _employee_email(req: ReimbursementRequest) -> Optional[str]:
         return (req.created_by.email or "").strip() or None
     except Exception:
         return None
+
+
+def _approval_cc_list() -> List[str]:
+    """
+    Explicit reimbursement approval CC list.
+
+    Amreen receives a copy for visibility only. This helper only affects email
+    delivery. Approval authorization remains enforced in views.reimbursement_email_action
+    by logged-in user, signed approver_id, request stage, and assigned approver.
+    """
+    configured = _as_cfg_list(getattr(settings, "REIMBURSEMENT_APPROVAL_CC", None))
+    return _dedupe_preserve(configured or ["amreen@blueoceansteels.com"])
 
 
 # ---------------------------------------------------------------------------
@@ -660,15 +662,30 @@ def _build_lines_table_text(
 _ACTION_SALT = "reimbursement-email-action"  # must match views.EMAIL_ACTION_SALT
 
 
+
 def _build_action_token(req: ReimbursementRequest, role: str, decision: str) -> str:
+    if role == "manager":
+        approver_id = req.manager_id
+        stage = ReimbursementRequest.Status.PENDING_MANAGER
+    elif role == "management":
+        approver_id = req.management_id
+        stage = ReimbursementRequest.Status.PENDING_MANAGEMENT
+    else:
+        raise ValueError("Invalid reimbursement approval role")
+
+    if not approver_id:
+        raise ValueError("Cannot build reimbursement approval token without an assigned approver")
+
     payload: Dict[str, object] = {
         "req_id": req.id,
         "role": role,
         "decision": decision,
-        "ts": timezone.now().timestamp(),  # consumer should enforce TTL
+        "approver_id": int(approver_id),
+        "stage": stage,
+        "status": stage,
+        "ts": timezone.now().timestamp(),
     }
     return signing.dumps(payload, salt=_ACTION_SALT)
-
 
 def _build_action_url(req: ReimbursementRequest, role: str, decision: str) -> str:
     token = _build_action_token(req, role, decision)
@@ -880,11 +897,10 @@ def send_reimbursement_finance_verified(req: ReimbursementRequest) -> None:
     lines_txt = _build_lines_table_text(req, finance_approved_only=True)
     buttons_html = _manager_action_buttons(req)
 
-    verifier_email = (
-        (req.verified_by.email or "").strip()
-        if (req.verified_by and getattr(req.verified_by, "email", None)) else ""
-    )
-    cc_list = _dedupe_preserve([verifier_email] if verifier_email else [])
+    # Approval email TO remains the assigned approver only. Amreen is CC for
+    # visibility only and cannot approve because the action view validates the
+    # logged-in assigned approver and token approver_id.
+    cc_list = _approval_cc_list()
 
     html = f"""
 <html>
@@ -918,12 +934,12 @@ def send_reimbursement_finance_verified(req: ReimbursementRequest) -> None:
         <a href="{detail_url}" style="color:#2563eb;text-decoration:none;">{detail_url}</a>
       </p>
 
-      <p style="font-size:14px;margin:16px 0 6px 0;">Quick actions (no login required):</p>
+      <p style="font-size:14px;margin:16px 0 6px 0;">Quick actions (login required; assigned approver only):</p>
       {buttons_html}
 
       <p style="font-size:12px;color:#6b7280;margin-top:16px;">
         This email was sent to: {escape(approver_list_str)}
-        {(" | CC: " + ", ".join(cc_list)) if cc_list else ""}
+        {(" | CC: " + escape(", ".join(cc_list))) if cc_list else ""}
       </p>
 
       <p style="font-size:13px;margin-top:16px;color:#4b5563;">
@@ -946,6 +962,7 @@ def send_reimbursement_finance_verified(req: ReimbursementRequest) -> None:
             f"Verified By - {verifier_name}",
             f"Verification Timestamp - {verified_at}",
             f"Approver(s) - {approver_list_str}",
+            f"CC - {', '.join(cc_list) if cc_list else '-'}",
             f"Eligible Bill Count - {eligible_count}",
             f"Eligible Amount - ₹{amt_str}",
             "",
@@ -955,7 +972,7 @@ def send_reimbursement_finance_verified(req: ReimbursementRequest) -> None:
             "View in BOS Lakshya:",
             detail_url,
             "",
-            "Quick actions (secure, no login):",
+            "Quick actions (secure; login required; assigned approver only):",
             f"Approve: {_build_action_url(req, 'manager', 'approved')}",
             f"Reject : {_build_action_url(req, 'manager', 'rejected')}",
         ]
@@ -973,7 +990,7 @@ def send_reimbursement_finance_verified(req: ReimbursementRequest) -> None:
         kind=kind,
         subject=subject,
         to_addrs=mgr_rec.to,
-        cc=cc_list,          # ONLY verifier (concerned)
+        cc=cc_list,          # visibility CC only; no approval authority
         reply_to=[],         # defaults to Amreen via _send
         html=html,
         txt=txt,
@@ -1126,7 +1143,7 @@ def send_reimbursement_submitted(req: ReimbursementRequest, *, employee_note: st
       </p>
 
       <p style="font-size:14px;margin:16px 0 6px 0;">
-        Quick actions (no login required):
+        Quick actions (login required; assigned approver only):
       </p>
 
       {buttons_html}
@@ -1164,7 +1181,7 @@ def send_reimbursement_submitted(req: ReimbursementRequest, *, employee_note: st
             "View in BOS Lakshya:",
             detail_url,
             "",
-            "Quick actions (no login, via secure link):",
+            "Quick actions (login required; assigned approver only):",
             f"Approve: {_build_action_url(req, 'manager', 'approved')}",
             f"Reject : {_build_action_url(req, 'manager', 'rejected')}",
             "",
