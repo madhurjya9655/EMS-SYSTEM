@@ -8,7 +8,6 @@ from django.contrib.auth.decorators import login_required
 from django.contrib import messages
 from django.core.exceptions import ValidationError
 from django.core.mail import EmailMessage
-from django.template.loader import render_to_string
 from django.conf import settings
 from django.http import JsonResponse
 
@@ -18,7 +17,11 @@ from .forms import (
     VendorPaymentInvoiceFormSet,
     VendorApprovalConfigForm,
 )
-from .services import send_vendor_payment_submission_email
+from .services import (
+    send_vendor_payment_final_approval_email,
+    send_vendor_payment_manager_approval_email,
+    send_vendor_payment_submission_email,
+)
 from apps.users.permissions import _user_permission_codes
 
 logger = logging.getLogger(__name__)
@@ -277,91 +280,21 @@ def _send_finance_approved_email(request, obj):
     """
     Notify senior authority after finance approval.
 
-    Multi-invoice behavior:
-    - One email only.
-    - Shows request-level grand total.
-    - Shows invoice summary.
+    Workflow is unchanged. The email body is built in services.py so the
+    finance verifier and full invoice context are preserved consistently.
     """
-    config = VendorApprovalConfig.get_config()
-
-    if not config.senior_authority or not config.senior_authority.email:
-        return
-
-    subject = f"Vendor Payment Ready for Final Approval — {obj.request_id}"
-
-    approved_by = ""
-    if obj.finance_approved_by_id:
-        approved_by = (
-            obj.finance_approved_by.get_full_name()
-            or obj.finance_approved_by.username
-        )
-
-    invoice_lines = _invoice_summary_lines(obj)
-
-    body = (
-        "A vendor payment request has cleared finance review and awaits final approval.\n\n"
-        f"Request ID       : {obj.request_id}\n"
-        f"Vendor           : {obj.vendor_display_name}\n"
-        f"Vendor Type      : {obj.vendor_type_display_safe}\n"
-        f"Total Invoices   : {obj.invoice_count}\n"
-        f"Grand Total      : INR {obj.payment_total}\n"
-        f"Finance Approved : {approved_by}\n\n"
-        "Invoice Summary:\n"
-        f"{chr(10).join(invoice_lines) if invoice_lines else '—'}\n\n"
-        f"Please log in to give final approval.\n{request.build_absolute_uri('/')}"
-    )
-
-    try:
-        EmailMessage(
-            subject=subject,
-            body=body,
-            from_email=settings.DEFAULT_FROM_EMAIL,
-            to=[config.senior_authority.email],
-        ).send(fail_silently=True)
-    except Exception:
-        logger.exception(
-            "Vendor finance-approved email failed for request pk=%s",
-            getattr(obj, "pk", None),
-        )
+    send_vendor_payment_manager_approval_email(request, obj)
 
 
 def _send_final_approval_email(request, obj):
     """
     Notify Mumbai/accounts team after senior final approval.
 
-    Template should be updated later to show invoice count and grand total.
+    Workflow, recipients, and trigger point are unchanged. The email body is
+    built from the original approved request with invoices, bank details,
+    finance verification, manager approval, and uploaded attachments.
     """
-    config = VendorApprovalConfig.get_config()
-    to_list = config.get_mumbai_email_list()
-    cc_list = config.get_cc_email_list()
-
-    if not to_list:
-        return
-
-    subject = f"Vendor Payment Approved — {obj.request_id}"
-
-    body = render_to_string(
-        "vendor/email/final_approval.txt",
-        {
-            "obj": obj,
-            "invoice_lines": _invoice_summary_lines(obj),
-            "site_url": request.build_absolute_uri("/"),
-        },
-    )
-
-    try:
-        EmailMessage(
-            subject=subject,
-            body=body,
-            from_email=settings.DEFAULT_FROM_EMAIL,
-            to=to_list,
-            cc=cc_list,
-        ).send(fail_silently=True)
-    except Exception:
-        logger.exception(
-            "Vendor final approval email failed for request pk=%s",
-            getattr(obj, "pk", None),
-        )
+    send_vendor_payment_final_approval_email(request, obj)
 
 
 def _send_rejection_email(request, obj):

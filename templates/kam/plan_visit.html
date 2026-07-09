@@ -278,9 +278,65 @@
     <div class="kam-card-head">
       <div>
         <h2 class="kam-card-title">Recent Visit Table</h2>
-        <div class="kam-card-subtitle">Latest saved visits with clean status and customer chips.</div>
+        <div class="kam-card-subtitle">Latest saved visits with clean status and customer chips. Use filters to check older visits.</div>
       </div>
     </div>
+
+    <div class="kam-card-body" style="padding-bottom: 12px;">
+      <form method="get" action="{{ request.path }}" class="row g-3 align-items-end">
+        <div class="col-md-3">
+          <label class="kam-label" for="recent_from">From Visit Date</label>
+          <input
+            type="date"
+            name="recent_from"
+            id="recent_from"
+            class="form-control"
+            value="{{ recent_filters.from|default:'' }}"
+          >
+        </div>
+
+        <div class="col-md-3">
+          <label class="kam-label" for="recent_to">To Visit Date</label>
+          <input
+            type="date"
+            name="recent_to"
+            id="recent_to"
+            class="form-control"
+            value="{{ recent_filters.to|default:'' }}"
+          >
+        </div>
+
+        <div class="col-md-3">
+          <label class="kam-label" for="recent_status">Status</label>
+          <select name="recent_status" id="recent_status" class="form-select">
+            <option value="">All Status</option>
+            <option value="DRAFT" {% if recent_filters.status == "DRAFT" %}selected{% endif %}>Draft</option>
+            <option value="PENDING_APPROVAL" {% if recent_filters.status == "PENDING_APPROVAL" %}selected{% endif %}>Pending</option>
+            <option value="APPROVED" {% if recent_filters.status == "APPROVED" %}selected{% endif %}>Approved</option>
+            <option value="REJECTED" {% if recent_filters.status == "REJECTED" %}selected{% endif %}>Rejected</option>
+            <option value="COMPLETED" {% if recent_filters.status == "COMPLETED" %}selected{% endif %}>Completed</option>
+          </select>
+        </div>
+
+        <div class="col-md-3 d-flex gap-2 flex-wrap">
+          <button type="submit" class="btn btn-primary">
+            <i class="fas fa-filter me-1"></i>Filter
+          </button>
+          <a href="{{ request.path }}" class="btn btn-outline-secondary">
+            Reset
+          </a>
+        </div>
+      </form>
+
+      <div class="kam-help mt-2">
+        {% if recent_filters.from or recent_filters.to or recent_filters.status %}
+          Showing filtered visit records. Maximum {{ recent_filters.limit }} rows.
+        {% else %}
+          Showing latest {{ recent_filters.limit }} saved visit records.
+        {% endif %}
+      </div>
+    </div>
+
     <div class="table-responsive">
       <table class="table table-hover align-middle table-modern">
         <thead>
@@ -314,7 +370,7 @@
               <td class="text-end"><a href="{% url 'kam:visits' %}?plan={{ plan.id }}" class="btn btn-sm btn-outline-primary">Open</a></td>
             </tr>
           {% empty %}
-            <tr><td colspan="6" class="empty-row">No recent visit plans found.</td></tr>
+            <tr><td colspan="6" class="empty-row">No visit plans found for the selected filter.</td></tr>
           {% endfor %}
         </tbody>
       </table>

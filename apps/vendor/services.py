@@ -63,6 +63,19 @@ def _file_display_name(file_field) -> str:
     return file_name.split("/")[-1]
 
 
+def _user_display_name(user) -> str:
+    """
+    Return the safest display name for a Django user.
+    """
+    if not user:
+        return ""
+
+    try:
+        return user.get_full_name() or user.username or user.email or ""
+    except Exception:
+        return ""
+
+
 def _attach_file_if_possible(email, file_field, label: str) -> None:
     """
     Attach file physically to the email when local file path is available.
@@ -221,6 +234,100 @@ def _invoice_count(obj, invoices: list[dict]) -> int:
         return len(invoices)
 
 
+def _invoice_amount_totals(invoices: list[dict]) -> dict:
+    """
+    Calculate display totals from the invoice context already loaded for email.
+    """
+    base_total = 0
+    gst_total = 0
+    total_amount = 0
+
+    for invoice in invoices:
+        base_total += invoice.get("base_amount") or 0
+        gst_total += invoice.get("gst_amount") or 0
+        total_amount += invoice.get("total_amount") or 0
+
+    return {
+        "base_total": base_total,
+        "gst_total": gst_total,
+        "invoice_total": total_amount,
+    }
+
+
+def _build_common_email_context(request, obj, *, review_url: str = "") -> dict:
+    """
+    Build the complete request context used by vendor payment emails.
+
+    This intentionally reads from the original VendorPaymentRequest and its
+    related invoice rows instead of reconstructing values from a lossy summary.
+    """
+    invoices = _build_invoice_context(request, obj)
+
+    bank_attachment = getattr(obj, "bank_attachment", None)
+    bank_attachment_url = _absolute_file_url(request, bank_attachment)
+    bank_attachment_name = _file_display_name(bank_attachment)
+
+    submitted_by = ""
+    if getattr(obj, "created_by_id", None):
+        submitted_by = _user_display_name(getattr(obj, "created_by", None))
+
+    finance_verified_by = ""
+    if getattr(obj, "finance_approved_by_id", None):
+        finance_verified_by = _user_display_name(getattr(obj, "finance_approved_by", None))
+
+    approved_by = ""
+    if getattr(obj, "final_approved_by_id", None):
+        approved_by = _user_display_name(getattr(obj, "final_approved_by", None))
+
+    totals = _invoice_amount_totals(invoices)
+    grand_total = _payment_total(obj)
+    invoice_count = _invoice_count(obj, invoices)
+
+    return {
+        "obj": obj,
+        "review_url": review_url,
+        "site_url": request.build_absolute_uri("/"),
+        "submitted_by": submitted_by,
+        "requested_date": getattr(obj, "created_at", None),
+        "invoices": invoices,
+        "invoice_count": invoice_count,
+        "base_total": totals["base_total"],
+        "gst_total": totals["gst_total"],
+        "invoice_total": totals["invoice_total"],
+        "grand_total": grand_total,
+        "bank_attachment": bank_attachment,
+        "bank_attachment_url": bank_attachment_url,
+        "bank_attachment_available": bool(bank_attachment),
+        "bank_attachment_name": bank_attachment_name,
+        "finance_verified_by": finance_verified_by,
+        "approved_by": approved_by,
+        "approved_on": getattr(obj, "updated_at", None),
+    }
+
+
+def _attach_vendor_payment_files(email, context: dict) -> None:
+    """
+    Attach every uploaded file currently stored on the approved request.
+
+    Current model storage:
+    - Child invoice files: VendorPaymentInvoice.invoice_attachment
+    - Legacy invoice file: VendorPaymentRequest.attachment via invoice context
+    - Bank proof file: VendorPaymentRequest.bank_attachment
+    """
+    for invoice in context.get("invoices", []):
+        _attach_file_if_possible(
+            email=email,
+            file_field=invoice.get("invoice_attachment"),
+            label=f"invoice attachment {invoice.get('invoice_number') or ''}".strip(),
+        )
+
+    _attach_file_if_possible(
+        email=email,
+        file_field=context.get("bank_attachment"),
+        label="bank details attachment",
+    )
+
+
 def send_vendor_payment_submission_email(request, obj) -> None:
     """
     Send professional HTML vendor payment approval email to finance approvers.
@@ -254,33 +361,7 @@ def send_vendor_payment_submission_email(request, obj) -> None:
         reverse("vendor:detail", kwargs={"pk": obj.pk})
     )
 
-    invoices = _build_invoice_context(request, obj)
-
-    bank_attachment = getattr(obj, "bank_attachment", None)
-    bank_attachment_url = _absolute_file_url(request, bank_attachment)
-    bank_attachment_name = _file_display_name(bank_attachment)
-
-    submitted_by = ""
-    if getattr(obj, "created_by_id", None):
-        try:
-            submitted_by = obj.created_by.get_full_name() or obj.created_by.username
-        except Exception:
-            submitted_by = ""
-
-    grand_total = _payment_total(obj)
-    invoice_count = _invoice_count(obj, invoices)
-
-    context = {
-        "obj": obj,
-        "review_url": review_url,
-        "submitted_by": submitted_by,
-        "invoices": invoices,
-        "invoice_count": invoice_count,
-        "grand_total": grand_total,
-        "bank_attachment_url": bank_attachment_url,
-        "bank_attachment_available": bool(bank_attachment),
-        "bank_attachment_name": bank_attachment_name,
-    }
+    context = _build_common_email_context(request, obj, review_url=review_url)
 
     text_body = render_to_string(
         "email/vendor_payment_approval.txt",
@@ -301,21 +382,7 @@ def send_vendor_payment_submission_email(request, obj) -> None:
         )
 
         email.attach_alternative(html_body, "text/html")
-
-        # Attach all invoice files physically where possible.
-        for invoice in invoices:
-            _attach_file_if_possible(
-                email=email,
-                file_field=invoice.get("invoice_attachment"),
-                label=f"invoice attachment {invoice.get('invoice_number') or ''}".strip(),
-            )
-
-        # Attach bank proof/cancelled cheque physically where possible.
-        _attach_file_if_possible(
-            email=email,
-            file_field=bank_attachment,
-            label="bank details attachment",
-        )
+        _attach_vendor_payment_files(email, context)
 
         email.send(fail_silently=False)
 
@@ -323,13 +390,130 @@ def send_vendor_payment_submission_email(request, obj) -> None:
             "Vendor payment submission email sent successfully for request pk=%s request_id=%s invoice_count=%s grand_total=%s",
             getattr(obj, "pk", None),
             getattr(obj, "request_id", ""),
-            invoice_count,
-            grand_total,
+            context.get("invoice_count"),
+            context.get("grand_total"),
         )
 
     except Exception:
         logger.exception(
             "Vendor payment submission email failed for request pk=%s request_id=%s",
+            getattr(obj, "pk", None),
+            getattr(obj, "request_id", ""),
+        )
+
+
+def send_vendor_payment_manager_approval_email(request, obj) -> None:
+    """
+    Notify the assigned manager/senior authority after finance verification.
+
+    This preserves the existing approval workflow and recipients. It only enriches
+    the email body with the verified finance manager stored on the request.
+    """
+    config = VendorApprovalConfig.get_config()
+
+    if not config.senior_authority or not config.senior_authority.email:
+        return
+
+    subject = f"Vendor Payment Ready for Final Approval - {obj.request_id}"
+
+    review_url = request.build_absolute_uri(
+        reverse("vendor:detail", kwargs={"pk": obj.pk})
+    )
+
+    context = _build_common_email_context(request, obj, review_url=review_url)
+
+    text_body = render_to_string(
+        "email/vendor_payment_approval.txt",
+        context,
+    )
+
+    html_body = render_to_string(
+        "email/vendor_payment_approval.html",
+        context,
+    )
+
+    try:
+        email = EmailMultiAlternatives(
+            subject=subject,
+            body=text_body,
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            to=[config.senior_authority.email],
+        )
+
+        email.attach_alternative(html_body, "text/html")
+        _attach_vendor_payment_files(email, context)
+        email.send(fail_silently=False)
+
+        logger.info(
+            "Vendor manager approval email sent successfully for request pk=%s request_id=%s",
+            getattr(obj, "pk", None),
+            getattr(obj, "request_id", ""),
+        )
+
+    except Exception:
+        logger.exception(
+            "Vendor manager approval email failed for request pk=%s request_id=%s",
+            getattr(obj, "pk", None),
+            getattr(obj, "request_id", ""),
+        )
+
+
+def send_vendor_payment_final_approval_email(request, obj) -> None:
+    """
+    Notify Mumbai/accounts team after final manager approval.
+
+    The email context is built from the original approved VendorPaymentRequest,
+    including all related invoice rows and stored attachments.
+    """
+    config = VendorApprovalConfig.get_config()
+    to_list = config.get_mumbai_email_list()
+    cc_list = config.get_cc_email_list()
+
+    if not to_list:
+        return
+
+    subject = f"Vendor Payment Approved - {obj.request_id}"
+
+    review_url = request.build_absolute_uri(
+        reverse("vendor:detail", kwargs={"pk": obj.pk})
+    )
+
+    context = _build_common_email_context(request, obj, review_url=review_url)
+
+    text_body = render_to_string(
+        "email/vendor_payment_confirmation.txt",
+        context,
+    )
+
+    html_body = render_to_string(
+        "email/vendor_payment_confirmation.html",
+        context,
+    )
+
+    try:
+        email = EmailMultiAlternatives(
+            subject=subject,
+            body=text_body,
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            to=to_list,
+            cc=cc_list,
+        )
+
+        email.attach_alternative(html_body, "text/html")
+        _attach_vendor_payment_files(email, context)
+        email.send(fail_silently=False)
+
+        logger.info(
+            "Vendor final approval email sent successfully for request pk=%s request_id=%s invoice_count=%s grand_total=%s",
+            getattr(obj, "pk", None),
+            getattr(obj, "request_id", ""),
+            context.get("invoice_count"),
+            context.get("grand_total"),
+        )
+
+    except Exception:
+        logger.exception(
+            "Vendor final approval email failed for request pk=%s request_id=%s",
             getattr(obj, "pk", None),
             getattr(obj, "request_id", ""),
         )

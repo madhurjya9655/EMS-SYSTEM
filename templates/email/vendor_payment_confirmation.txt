@@ -1,33 +1,36 @@
-Vendor Payment Approval Required
+Vendor Payment Approved
 
-A new vendor payment request has been submitted and requires review.
+A vendor payment request has been approved and is ready for payment processing.
 
 Request Information
 
 Request ID:
 {{ obj.request_id }}
 
-Vendor:
+Vendor Name:
 {{ obj.vendor_display_name }}
 
+{% if obj.vendor.code %}
+Vendor Code:
+{{ obj.vendor.code }}
+
+{% endif %}
 Vendor Type:
 {{ obj.vendor_type_display_safe }}
 
-Submitted By:
+Requested By:
 {{ submitted_by|default:"-" }}
+
+Requested Date:
+{% if requested_date %}{{ requested_date|date:"d-m-Y H:i" }}{% else %}-{% endif %}
+
+Approval Date:
+{% if approved_on %}{{ approved_on|date:"d-m-Y H:i" }}{% else %}-{% endif %}
 
 Total Invoices:
 {{ invoice_count }}
 
-Grand Total:
-INR {{ grand_total|floatformat:2 }}
-
-{% if finance_verified_by %}
-Verified by Finance Manager:
-{{ finance_verified_by }}
-
-{% endif %}
-Invoice Summary
+Invoice Information
 
 {% for invoice in invoices %}
 Invoice {{ forloop.counter }}
@@ -65,6 +68,17 @@ Not Available
 No invoice rows found.
 {% endfor %}
 
+Payment Summary
+
+Base Amount:
+INR {{ base_total|floatformat:2 }}
+
+GST Amount:
+INR {{ gst_total|floatformat:2 }}
+
+Grand Total:
+INR {{ grand_total|floatformat:2 }}
+
 Bank Details
 
 Bank Details Attachment:
@@ -86,9 +100,20 @@ Bank Details Text:
 -
 {% endif %}
 
-Actions
+Finance Verification
 
-Review Request:
+Verified by Finance Manager:
+{{ finance_verified_by|default:"-" }}
+
+Manager Approval
+
+Approved By:
+{{ approved_by|default:"-" }}
+
+Approved On:
+{% if approved_on %}{{ approved_on|date:"d-m-Y H:i" }}{% else %}-{% endif %}
+
+Open Request:
 {{ review_url }}
 
 This is a system-generated email from BOS Lakshya ERP.

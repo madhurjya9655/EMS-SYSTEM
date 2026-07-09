@@ -5492,22 +5492,44 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
     # ---------------------------------------------------------------------
     # GET PAGE RENDER
     # ---------------------------------------------------------------------
-    if schema_ready:
-        today_local = timezone.localtime(timezone.now()).date()
-        plan_window_start = today_local - timezone.timedelta(days=7)
-        plan_window_end = today_local + timezone.timedelta(days=7)
+    recent_from_date = None
+    recent_to_date = None
+    recent_status = ""
+    recent_limit = 25
 
+    if schema_ready:
         # Recent Visit Plans must be rendered from VisitPlan rows only.
-        # One VisitPlan row = one visit = one customer/entity + one stored purpose.
-        my_plans = _attach_visit_customer_display(list(
+        # Default view shows the latest saved VisitPlan records.
+        # Optional filters allow users to check older visits by visit-date range/status.
+        recent_from_date = _parse_iso_date(request.GET.get("recent_from", ""))
+        recent_to_date = _parse_iso_date(request.GET.get("recent_to", ""))
+        recent_status = (request.GET.get("recent_status") or "").strip().upper()
+
+        recent_qs = (
             _visitplan_qs_for_user(user)
-            .filter(
-                visit_date__gte=plan_window_start,
-                visit_date__lte=plan_window_end,
-            )
             .select_related("customer", "kam", "batch", "actual")
-            .order_by("-visit_date", "-created_at", "-id")
-            .distinct()[:25]
+        )
+
+        if recent_from_date:
+            recent_qs = recent_qs.filter(visit_date__gte=recent_from_date)
+
+        if recent_to_date:
+            recent_qs = recent_qs.filter(visit_date__lte=recent_to_date)
+
+        if recent_status and recent_status not in {"ALL", "*"}:
+            recent_qs = recent_qs.filter(approval_status=recent_status)
+
+        if recent_from_date or recent_to_date or recent_status:
+            recent_ordering = ("-visit_date", "-created_at", "-id")
+            recent_limit = 100
+        else:
+            recent_ordering = ("-created_at", "-id")
+            recent_limit = 25
+
+        my_plans = _attach_visit_customer_display(list(
+            recent_qs
+            .order_by(*recent_ordering)
+            .distinct()[:recent_limit]
         ))
 
         for plan in my_plans:
@@ -5519,9 +5541,9 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
             recent_purpose = (getattr(plan, "purpose", "") or "").strip()
 
             try:
-                recent_status = plan.get_approval_status_display()
+                recent_status_label = plan.get_approval_status_display()
             except Exception:
-                recent_status = (getattr(plan, "approval_status", "") or "").strip()
+                recent_status_label = (getattr(plan, "approval_status", "") or "").strip()
 
             kam_obj = getattr(plan, "kam", None)
             if kam_obj:
@@ -5532,7 +5554,7 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
             if not getattr(plan, "recent_customer_name", None):
                 plan.recent_customer_name = recent_customer_name or "-"
             plan.recent_purpose = recent_purpose or "-"
-            plan.recent_status = recent_status or "-"
+            plan.recent_status = recent_status_label or "-"
             plan.recent_kam_name = recent_kam_name or "-"
     else:
         my_plans = []
@@ -5545,6 +5567,12 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
         "plans": my_plans,
         "recent_plans": my_plans,
         "recent_visits": my_plans,
+        "recent_filters": {
+            "from": recent_from_date.isoformat() if recent_from_date else "",
+            "to": recent_to_date.isoformat() if recent_to_date else "",
+            "status": recent_status,
+            "limit": recent_limit,
+        },
         "customers": list(customer_qs),
         "SINGLE_PREFIX": SINGLE_PREFIX,
         "BATCH_PREFIX": BATCH_PREFIX,
