@@ -2537,7 +2537,7 @@ def reimbursement_email_action(request):
 
     with transaction.atomic():
         req = get_object_or_404(
-            ReimbursementRequest.objects.select_for_update().select_related(
+            ReimbursementRequest.objects.select_for_update(of=("self",)).select_related(
                 "created_by", "manager", "management"
             ),
             pk=req_id,
