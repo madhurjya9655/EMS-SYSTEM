@@ -1428,9 +1428,15 @@ def send_reimbursement_manager_action(req: ReimbursementRequest, *, decision: st
         logger.info("Suppressing duplicate manager '%s' email for reimbursement #%s.", decision, req.id)
         return
 
+    # Final approval notification is independent from the employee-facing
+    # manager-decision email. Do not let a missing employee email suppress
+    # the Mumbai Office / Finance approval notification.
+    if decision == "approved":
+        send_reimbursement_final_notification(req)
+
     emp_email = _employee_email(req)
     if not emp_email:
-        logger.info("Manager action email suppressed: employee has no email (req #%s).", req.id)
+        logger.info("Manager action employee email suppressed: employee has no email (req #%s).", req.id)
         return
 
     emp_name = escape(_employee_display_name(req.created_by))
@@ -1513,9 +1519,6 @@ def send_reimbursement_manager_action(req: ReimbursementRequest, *, decision: st
         txt=txt,
         extra_headers={"X-BOS-Flow": "reimbursement", "X-BOS-Stage": "manager_action"},
     )
-
-    if decision == "approved":
-        send_reimbursement_final_notification(req)
 
 
 def send_reimbursement_management_action(req: ReimbursementRequest, *, decision: str) -> None:
