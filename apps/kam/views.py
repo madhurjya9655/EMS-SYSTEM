@@ -3161,6 +3161,7 @@ def _build_batch_approval_email(
                 ),
                 "category": _safe_email_value(visit_category_label),
                 "purpose": _safe_email_value(getattr(plan, "purpose", None) or remarks),
+                "purpose_of_visit": _safe_email_value(getattr(plan, "purpose", None) or remarks),
             })
 
     except Exception:
