@@ -26,8 +26,8 @@ def _unique_email_list(emails, *, exclude=None) -> list[str]:
     """
     Return a clean, case-insensitively de-duplicated email list.
 
-    Addresses in exclude are removed from the result so the same recipient
-    is not present in both TO and CC.
+    Addresses in exclude are removed so the same recipient is not present
+    in both TO and another recipient group.
     """
     excluded = {
         _normalise_email(email)
@@ -64,10 +64,8 @@ def _get_finance_email_list(
     Return the Finance Team configured by an administrator.
 
     Sources:
-    - Existing active system users selected under Finance Users.
-    - Full email addresses entered under Finance manual emails.
-
-    No names or email addresses are hardcoded.
+    - Active users selected under Finance Users.
+    - Full addresses entered under Finance manual emails.
     """
     return _unique_email_list(
         config.get_finance_email_list()
@@ -81,10 +79,8 @@ def _get_mumbai_email_list(
     Return Mumbai Office recipients configured by an administrator.
 
     Sources:
-    - Existing active system users selected under Mumbai Accounts.
-    - Full email addresses entered under Mumbai manual emails.
-
-    No names or email addresses are hardcoded.
+    - Active users selected under Mumbai Accounts.
+    - Full addresses entered under Mumbai manual emails.
     """
     return _unique_email_list(
         config.get_mumbai_email_list()
@@ -427,7 +423,10 @@ def _build_common_email_context(
 
     finance_verification_remark = ""
 
-    if email_stage == "final_approval":
+    if email_stage in {
+        "manager_final_approval",
+        "finance_final_approval_information",
+    }:
         finance_verification_remark = str(
             getattr(obj, "remarks", "") or ""
         ).strip()
@@ -472,8 +471,11 @@ def _build_common_email_context(
         "is_finance_verification_email": (
             email_stage == "finance_verification"
         ),
-        "is_final_approval_email": (
-            email_stage == "final_approval"
+        "is_manager_final_approval_email": (
+            email_stage == "manager_final_approval"
+        ),
+        "is_finance_final_approval_information_email": (
+            email_stage == "finance_final_approval_information"
         ),
         "is_payment_processing_email": (
             email_stage == "payment_processing"
@@ -508,6 +510,39 @@ def _attach_vendor_payment_files(
         file_field=context.get("bank_attachment"),
         label="bank details attachment",
     )
+
+
+def _send_html_email(
+    *,
+    subject: str,
+    text_body: str,
+    html_body: str,
+    to_list: list[str],
+    cc_list=None,
+    context: dict,
+) -> None:
+    """
+    Send a Vendor Payment multipart email with its existing attachments.
+    """
+    email = EmailMultiAlternatives(
+        subject=subject,
+        body=text_body,
+        from_email=settings.DEFAULT_FROM_EMAIL,
+        to=to_list,
+        cc=cc_list or [],
+    )
+
+    email.attach_alternative(
+        html_body,
+        "text/html",
+    )
+
+    _attach_vendor_payment_files(
+        email,
+        context,
+    )
+
+    email.send(fail_silently=False)
 
 
 def send_vendor_payment_submission_email(
@@ -561,24 +596,13 @@ def send_vendor_payment_submission_email(
     )
 
     try:
-        email = EmailMultiAlternatives(
+        _send_html_email(
             subject=subject,
-            body=text_body,
-            from_email=settings.DEFAULT_FROM_EMAIL,
-            to=to_list,
+            text_body=text_body,
+            html_body=html_body,
+            to_list=to_list,
+            context=context,
         )
-
-        email.attach_alternative(
-            html_body,
-            "text/html",
-        )
-
-        _attach_vendor_payment_files(
-            email,
-            context,
-        )
-
-        email.send(fail_silently=False)
 
         logger.info(
             "Vendor Finance Verification email sent for request pk=%s "
@@ -602,19 +626,30 @@ def send_vendor_payment_manager_approval_email(
     obj,
 ) -> None:
     """
-    Send Final Approval email.
+    Send two separate emails after Finance Verification.
 
-    TO:
-    - Assigned senior authority
+    Email 1:
+    - TO: assigned senior authority only
+    - Includes Approve button
+    - No Finance recipients in CC
 
-    CC:
-    - Administrator-configured Finance Team
+    Email 2:
+    - TO: configured Finance Team
+    - Information only
+    - No approval button or approval link
+
+    Approval workflow and trigger remain unchanged.
     """
     config = VendorApprovalConfig.get_config()
 
     senior_authority = config.senior_authority
 
     if not senior_authority:
+        logger.warning(
+            "Vendor Final Approval manager email skipped for request pk=%s "
+            "because no senior authority is configured",
+            getattr(obj, "pk", None),
+        )
         return
 
     approver_email = str(
@@ -622,24 +657,15 @@ def send_vendor_payment_manager_approval_email(
     ).strip()
 
     if not approver_email:
+        logger.warning(
+            "Vendor Final Approval manager email skipped for request pk=%s "
+            "because the senior authority has no email address",
+            getattr(obj, "pk", None),
+        )
         return
 
-    to_list = _unique_email_list(
+    manager_to_list = _unique_email_list(
         [approver_email]
-    )
-
-    finance_cc_list = _get_finance_email_list(
-        config
-    )
-
-    cc_list = _unique_email_list(
-        finance_cc_list,
-        exclude=to_list,
-    )
-
-    subject = (
-        "Vendor Payment Ready for Final Approval - "
-        f"{obj.request_id}"
     )
 
     approval_url = request.build_absolute_uri(
@@ -649,57 +675,111 @@ def send_vendor_payment_manager_approval_email(
         )
     )
 
-    context = _build_common_email_context(
+    manager_context = _build_common_email_context(
         request,
         obj,
         review_url=approval_url,
-        email_stage="final_approval",
+        email_stage="manager_final_approval",
     )
 
-    text_body = render_to_string(
+    manager_subject = (
+        "Vendor Payment Ready for Final Approval - "
+        f"{obj.request_id}"
+    )
+
+    manager_text_body = render_to_string(
         "email/vendor_payment_approval.txt",
-        context,
+        manager_context,
     )
 
-    html_body = render_to_string(
+    manager_html_body = render_to_string(
         "email/vendor_payment_approval.html",
-        context,
+        manager_context,
     )
 
     try:
-        email = EmailMultiAlternatives(
-            subject=subject,
-            body=text_body,
-            from_email=settings.DEFAULT_FROM_EMAIL,
-            to=to_list,
-            cc=cc_list,
+        _send_html_email(
+            subject=manager_subject,
+            text_body=manager_text_body,
+            html_body=manager_html_body,
+            to_list=manager_to_list,
+            cc_list=[],
+            context=manager_context,
         )
-
-        email.attach_alternative(
-            html_body,
-            "text/html",
-        )
-
-        _attach_vendor_payment_files(
-            email,
-            context,
-        )
-
-        email.send(fail_silently=False)
 
         logger.info(
-            "Vendor Final Approval email sent for request pk=%s "
-            "request_id=%s to=%s cc=%s",
+            "Vendor Final Approval manager email sent for request pk=%s "
+            "request_id=%s to=%s",
             getattr(obj, "pk", None),
             getattr(obj, "request_id", ""),
-            to_list,
-            cc_list,
+            manager_to_list,
         )
 
     except Exception:
         logger.exception(
-            "Vendor Final Approval email failed for request pk=%s "
+            "Vendor Final Approval manager email failed for request pk=%s "
             "request_id=%s",
+            getattr(obj, "pk", None),
+            getattr(obj, "request_id", ""),
+        )
+
+    finance_to_list = _unique_email_list(
+        _get_finance_email_list(config),
+        exclude=manager_to_list,
+    )
+
+    if not finance_to_list:
+        logger.warning(
+            "Vendor Final Approval Finance information email skipped for "
+            "request pk=%s because no separate Finance recipients are configured",
+            getattr(obj, "pk", None),
+        )
+        return
+
+    finance_context = _build_common_email_context(
+        request,
+        obj,
+        review_url="",
+        email_stage="finance_final_approval_information",
+    )
+
+    finance_subject = (
+        "Vendor Payment Sent for Final Approval - "
+        f"{obj.request_id}"
+    )
+
+    finance_text_body = render_to_string(
+        "email/vendor_payment_approval.txt",
+        finance_context,
+    )
+
+    finance_html_body = render_to_string(
+        "email/vendor_payment_approval.html",
+        finance_context,
+    )
+
+    try:
+        _send_html_email(
+            subject=finance_subject,
+            text_body=finance_text_body,
+            html_body=finance_html_body,
+            to_list=finance_to_list,
+            cc_list=[],
+            context=finance_context,
+        )
+
+        logger.info(
+            "Vendor Final Approval Finance information email sent for "
+            "request pk=%s request_id=%s to=%s",
+            getattr(obj, "pk", None),
+            getattr(obj, "request_id", ""),
+            finance_to_list,
+        )
+
+    except Exception:
+        logger.exception(
+            "Vendor Final Approval Finance information email failed for "
+            "request pk=%s request_id=%s",
             getattr(obj, "pk", None),
             getattr(obj, "request_id", ""),
         )
@@ -769,25 +849,14 @@ def send_vendor_payment_final_approval_email(
     )
 
     try:
-        email = EmailMultiAlternatives(
+        _send_html_email(
             subject=subject,
-            body=text_body,
-            from_email=settings.DEFAULT_FROM_EMAIL,
-            to=to_list,
-            cc=cc_list,
+            text_body=text_body,
+            html_body=html_body,
+            to_list=to_list,
+            cc_list=cc_list,
+            context=context,
         )
-
-        email.attach_alternative(
-            html_body,
-            "text/html",
-        )
-
-        _attach_vendor_payment_files(
-            email,
-            context,
-        )
-
-        email.send(fail_silently=False)
 
         logger.info(
             "Vendor Mumbai payment-processing email sent for request pk=%s "

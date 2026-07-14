@@ -1,6 +1,20 @@
-{% if is_finance_verification_email %}Vendor Payment Verification Required{% else %}Vendor Payment Approval Required{% endif %}
+{% if is_finance_verification_email %}
+Vendor Payment Verification Required
+{% elif is_manager_final_approval_email %}
+Vendor Payment Approval Required
+{% elif is_finance_final_approval_information_email %}
+Vendor Payment Sent for Final Approval
+{% else %}
+Vendor Payment
+{% endif %}
 
-{% if is_finance_verification_email %}A new vendor payment request has been submitted and requires Finance Verification.{% else %}A vendor payment request has completed Finance Verification and requires Final Approval.{% endif %}
+{% if is_finance_verification_email %}
+A new vendor payment request has been submitted and requires Finance Verification.
+{% elif is_manager_final_approval_email %}
+A vendor payment request has completed Finance Verification and requires your Final Approval.
+{% elif is_finance_final_approval_information_email %}
+Finance Verification has been completed and this request has been sent to the assigned manager for Final Approval.
+{% endif %}
 
 Request Information
 
@@ -65,7 +79,7 @@ Not Available
 No invoice rows found.
 {% endfor %}
 
-{% if is_final_approval_email %}
+{% if is_manager_final_approval_email or is_finance_final_approval_information_email %}
 Finance Verification Remark
 
 {% if finance_verification_remark %}
@@ -96,9 +110,23 @@ Bank Details Text:
 -
 {% endif %}
 
-Actions
+{% if is_manager_final_approval_email %}
+Action
 
-{% if is_final_approval_email %}Approve{% else %}Review Request{% endif %}:
+Approve:
 {{ review_url }}
+
+This approval action is intended only for the assigned manager.
+{% elif is_finance_final_approval_information_email %}
+Information
+
+This request has been sent to the assigned manager for Final Approval.
+No action is required from the Finance Team.
+{% else %}
+Action
+
+Review Request:
+{{ review_url }}
+{% endif %}
 
 This is a system-generated email from BOS Lakshya ERP.

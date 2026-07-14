@@ -5,8 +5,12 @@
 
     {% if is_finance_verification_email %}
         <title>Vendor Payment Verification Required</title>
-    {% else %}
+    {% elif is_manager_final_approval_email %}
         <title>Vendor Payment Approval Required</title>
+    {% elif is_finance_final_approval_information_email %}
+        <title>Vendor Payment Sent for Final Approval</title>
+    {% else %}
+        <title>Vendor Payment</title>
     {% endif %}
 </head>
 
@@ -15,21 +19,28 @@
         <tr>
             <td align="center">
                 <table width="760" cellpadding="0" cellspacing="0" style="background-color:#ffffff; border:1px solid #dddddd; border-radius:8px;">
+
                     <tr>
                         <td style="padding:24px 28px 12px 28px;">
                             <h2 style="margin:0; font-size:20px; font-weight:600; color:#111111;">
                                 {% if is_finance_verification_email %}
                                     Vendor Payment Verification Required
-                                {% else %}
+                                {% elif is_manager_final_approval_email %}
                                     Vendor Payment Approval Required
+                                {% elif is_finance_final_approval_information_email %}
+                                    Vendor Payment Sent for Final Approval
+                                {% else %}
+                                    Vendor Payment
                                 {% endif %}
                             </h2>
 
                             <p style="margin:12px 0 0 0; font-size:14px; line-height:1.6; color:#444444;">
                                 {% if is_finance_verification_email %}
                                     A new vendor payment request has been submitted and requires Finance Verification.
-                                {% else %}
-                                    A vendor payment request has completed Finance Verification and requires Final Approval.
+                                {% elif is_manager_final_approval_email %}
+                                    A vendor payment request has completed Finance Verification and requires your Final Approval.
+                                {% elif is_finance_final_approval_information_email %}
+                                    Finance Verification has been completed and this request has been sent to the assigned manager for Final Approval.
                                 {% endif %}
                             </p>
                         </td>
@@ -43,42 +54,54 @@
 
                             <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse; font-size:14px;">
                                 <tr>
-                                    <td style="padding:8px 0; width:190px; color:#666666;">Request ID:</td>
+                                    <td style="padding:8px 0; width:190px; color:#666666;">
+                                        Request ID:
+                                    </td>
                                     <td style="padding:8px 0; font-weight:600; color:#222222;">
                                         {{ obj.request_id }}
                                     </td>
                                 </tr>
 
                                 <tr>
-                                    <td style="padding:8px 0; color:#666666;">Vendor:</td>
+                                    <td style="padding:8px 0; color:#666666;">
+                                        Vendor:
+                                    </td>
                                     <td style="padding:8px 0; color:#222222;">
                                         {{ obj.vendor_display_name }}
                                     </td>
                                 </tr>
 
                                 <tr>
-                                    <td style="padding:8px 0; color:#666666;">Vendor Type:</td>
+                                    <td style="padding:8px 0; color:#666666;">
+                                        Vendor Type:
+                                    </td>
                                     <td style="padding:8px 0; color:#222222;">
                                         {{ obj.vendor_type_display_safe }}
                                     </td>
                                 </tr>
 
                                 <tr>
-                                    <td style="padding:8px 0; color:#666666;">Submitted By:</td>
+                                    <td style="padding:8px 0; color:#666666;">
+                                        Submitted By:
+                                    </td>
                                     <td style="padding:8px 0; color:#222222;">
                                         {{ submitted_by|default:"-" }}
                                     </td>
                                 </tr>
 
                                 <tr>
-                                    <td style="padding:8px 0; color:#666666;">Total Invoices:</td>
+                                    <td style="padding:8px 0; color:#666666;">
+                                        Total Invoices:
+                                    </td>
                                     <td style="padding:8px 0; font-weight:600; color:#222222;">
                                         {{ invoice_count }}
                                     </td>
                                 </tr>
 
                                 <tr>
-                                    <td style="padding:8px 0; color:#666666;">Grand Total:</td>
+                                    <td style="padding:8px 0; color:#666666;">
+                                        Grand Total:
+                                    </td>
                                     <td style="padding:8px 0; font-size:18px; font-weight:700; color:#111111;">
                                         ₹{{ grand_total|floatformat:2 }}
                                     </td>
@@ -86,7 +109,9 @@
 
                                 {% if finance_verified_by %}
                                     <tr>
-                                        <td style="padding:8px 0; color:#666666;">Verified by Finance Manager:</td>
+                                        <td style="padding:8px 0; color:#666666;">
+                                            Verified by Finance Manager:
+                                        </td>
                                         <td style="padding:8px 0; font-weight:600; color:#222222;">
                                             {{ finance_verified_by }}
                                         </td>
@@ -107,13 +132,27 @@
                             <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse; font-size:13px;">
                                 <thead>
                                     <tr style="background-color:#eef2ff;">
-                                        <th align="left" style="border:1px solid #d1d5db; padding:8px;">Invoice No</th>
-                                        <th align="left" style="border:1px solid #d1d5db; padding:8px;">Invoice Date</th>
-                                        <th align="left" style="border:1px solid #d1d5db; padding:8px;">Bill Type</th>
-                                        <th align="right" style="border:1px solid #d1d5db; padding:8px;">Base</th>
-                                        <th align="right" style="border:1px solid #d1d5db; padding:8px;">GST</th>
-                                        <th align="right" style="border:1px solid #d1d5db; padding:8px;">Total</th>
-                                        <th align="left" style="border:1px solid #d1d5db; padding:8px;">Attachment</th>
+                                        <th align="left" style="border:1px solid #d1d5db; padding:8px;">
+                                            Invoice No
+                                        </th>
+                                        <th align="left" style="border:1px solid #d1d5db; padding:8px;">
+                                            Invoice Date
+                                        </th>
+                                        <th align="left" style="border:1px solid #d1d5db; padding:8px;">
+                                            Bill Type
+                                        </th>
+                                        <th align="right" style="border:1px solid #d1d5db; padding:8px;">
+                                            Base
+                                        </th>
+                                        <th align="right" style="border:1px solid #d1d5db; padding:8px;">
+                                            GST
+                                        </th>
+                                        <th align="right" style="border:1px solid #d1d5db; padding:8px;">
+                                            Total
+                                        </th>
+                                        <th align="left" style="border:1px solid #d1d5db; padding:8px;">
+                                            Attachment
+                                        </th>
                                     </tr>
                                 </thead>
 
@@ -150,7 +189,8 @@
 
                                             <td style="border:1px solid #e5e7eb; padding:8px;">
                                                 {% if invoice.invoice_url %}
-                                                    <a href="{{ invoice.invoice_url }}" style="color:#1f4e79; text-decoration:none;">
+                                                    <a href="{{ invoice.invoice_url }}"
+                                                       style="color:#1f4e79; text-decoration:none;">
                                                         View Invoice
                                                     </a>
                                                 {% else %}
@@ -178,11 +218,14 @@
 
                                 <tfoot>
                                     <tr>
-                                        <td colspan="5" align="right" style="border:1px solid #d1d5db; padding:8px; font-weight:700;">
+                                        <td colspan="5"
+                                            align="right"
+                                            style="border:1px solid #d1d5db; padding:8px; font-weight:700;">
                                             Grand Total
                                         </td>
 
-                                        <td align="right" style="border:1px solid #d1d5db; padding:8px; font-weight:700;">
+                                        <td align="right"
+                                            style="border:1px solid #d1d5db; padding:8px; font-weight:700;">
                                             ₹{{ grand_total|floatformat:2 }}
                                         </td>
 
@@ -193,7 +236,7 @@
                         </td>
                     </tr>
 
-                    {% if is_final_approval_email %}
+                    {% if is_manager_final_approval_email or is_finance_final_approval_information_email %}
                         <tr>
                             <td style="padding:12px 28px;">
                                 <hr style="border:none; border-top:1px solid #e5e5e5; margin:0 0 16px 0;">
@@ -223,7 +266,9 @@
 
                             <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse; font-size:14px;">
                                 <tr>
-                                    <td style="padding:8px 0; width:190px; color:#666666;">Bank Details Attachment:</td>
+                                    <td style="padding:8px 0; width:190px; color:#666666;">
+                                        Bank Details Attachment:
+                                    </td>
                                     <td style="padding:8px 0; color:#222222;">
                                         {% if bank_attachment_available %}
                                             Available
@@ -238,7 +283,9 @@
 
                                 {% if obj.bank_details_text %}
                                     <tr>
-                                        <td style="padding:8px 0; color:#666666; vertical-align:top;">Bank Details Text:</td>
+                                        <td style="padding:8px 0; color:#666666; vertical-align:top;">
+                                            Bank Details Text:
+                                        </td>
                                         <td style="padding:8px 0; color:#222222; line-height:1.5;">
                                             {{ obj.bank_details_text|linebreaksbr }}
                                         </td>
@@ -248,37 +295,80 @@
                         </td>
                     </tr>
 
-                    <tr>
-                        <td style="padding:18px 28px 28px 28px;">
-                            <table cellpadding="0" cellspacing="0">
-                                <tr>
-                                    <td style="padding-right:10px; padding-bottom:10px;">
-                                        <a href="{{ review_url }}"
-                                           style="display:inline-block; padding:11px 18px; background-color:#1f4e79; color:#ffffff; text-decoration:none; border-radius:4px; font-size:14px; font-weight:600;">
-                                            {% if is_final_approval_email %}
+                    {% if is_manager_final_approval_email %}
+                        <tr>
+                            <td style="padding:18px 28px 28px 28px;">
+                                <table cellpadding="0" cellspacing="0">
+                                    <tr>
+                                        <td style="padding-right:10px; padding-bottom:10px;">
+                                            <a href="{{ review_url }}"
+                                               style="display:inline-block; padding:11px 18px; background-color:#1f4e79; color:#ffffff; text-decoration:none; border-radius:4px; font-size:14px; font-weight:600;">
                                                 Approve
-                                            {% else %}
-                                                Review Request
-                                            {% endif %}
-                                        </a>
-                                    </td>
-
-                                    {% if bank_attachment_url %}
-                                        <td style="padding-bottom:10px;">
-                                            <a href="{{ bank_attachment_url }}"
-                                               style="display:inline-block; padding:11px 18px; background-color:#444444; color:#ffffff; text-decoration:none; border-radius:4px; font-size:14px; font-weight:600;">
-                                                Open Bank Details
                                             </a>
                                         </td>
-                                    {% endif %}
-                                </tr>
-                            </table>
 
-                            <p style="margin:18px 0 0 0; font-size:12px; line-height:1.5; color:#777777;">
-                                This is a system-generated email from BOS Lakshya ERP.
-                            </p>
-                        </td>
-                    </tr>
+                                        {% if bank_attachment_url %}
+                                            <td style="padding-bottom:10px;">
+                                                <a href="{{ bank_attachment_url }}"
+                                                   style="display:inline-block; padding:11px 18px; background-color:#444444; color:#ffffff; text-decoration:none; border-radius:4px; font-size:14px; font-weight:600;">
+                                                    Open Bank Details
+                                                </a>
+                                            </td>
+                                        {% endif %}
+                                    </tr>
+                                </table>
+
+                                <p style="margin:18px 0 0 0; font-size:12px; line-height:1.5; color:#777777;">
+                                    This approval action is intended only for the assigned manager.
+                                </p>
+
+                                <p style="margin:6px 0 0 0; font-size:12px; line-height:1.5; color:#777777;">
+                                    This is a system-generated email from BOS Lakshya ERP.
+                                </p>
+                            </td>
+                        </tr>
+                    {% elif is_finance_final_approval_information_email %}
+                        <tr>
+                            <td style="padding:18px 28px 28px 28px;">
+                                <p style="margin:0; font-size:14px; line-height:1.6; color:#444444;">
+                                    This email is for information only. The assigned manager has received a separate approval email.
+                                </p>
+
+                                <p style="margin:18px 0 0 0; font-size:12px; line-height:1.5; color:#777777;">
+                                    This is a system-generated email from BOS Lakshya ERP.
+                                </p>
+                            </td>
+                        </tr>
+                    {% else %}
+                        <tr>
+                            <td style="padding:18px 28px 28px 28px;">
+                                <table cellpadding="0" cellspacing="0">
+                                    <tr>
+                                        <td style="padding-right:10px; padding-bottom:10px;">
+                                            <a href="{{ review_url }}"
+                                               style="display:inline-block; padding:11px 18px; background-color:#1f4e79; color:#ffffff; text-decoration:none; border-radius:4px; font-size:14px; font-weight:600;">
+                                                Review Request
+                                            </a>
+                                        </td>
+
+                                        {% if bank_attachment_url %}
+                                            <td style="padding-bottom:10px;">
+                                                <a href="{{ bank_attachment_url }}"
+                                                   style="display:inline-block; padding:11px 18px; background-color:#444444; color:#ffffff; text-decoration:none; border-radius:4px; font-size:14px; font-weight:600;">
+                                                    Open Bank Details
+                                                </a>
+                                            </td>
+                                        {% endif %}
+                                    </tr>
+                                </table>
+
+                                <p style="margin:18px 0 0 0; font-size:12px; line-height:1.5; color:#777777;">
+                                    This is a system-generated email from BOS Lakshya ERP.
+                                </p>
+                            </td>
+                        </tr>
+                    {% endif %}
+
                 </table>
             </td>
         </tr>
