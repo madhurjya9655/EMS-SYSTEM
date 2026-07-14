@@ -2,7 +2,12 @@
 <html>
 <head>
     <meta charset="UTF-8">
-    <title>Vendor Payment Approval Required</title>
+
+    {% if is_finance_verification_email %}
+        <title>Vendor Payment Verification Required</title>
+    {% else %}
+        <title>Vendor Payment Approval Required</title>
+    {% endif %}
 </head>
 
 <body style="margin:0; padding:0; background-color:#f4f6f8; font-family:Arial, Helvetica, sans-serif; color:#222222;">
@@ -13,11 +18,19 @@
                     <tr>
                         <td style="padding:24px 28px 12px 28px;">
                             <h2 style="margin:0; font-size:20px; font-weight:600; color:#111111;">
-                                Vendor Payment Approval Required
+                                {% if is_finance_verification_email %}
+                                    Vendor Payment Verification Required
+                                {% else %}
+                                    Vendor Payment Approval Required
+                                {% endif %}
                             </h2>
 
                             <p style="margin:12px 0 0 0; font-size:14px; line-height:1.6; color:#444444;">
-                                A new vendor payment request has been submitted and requires review.
+                                {% if is_finance_verification_email %}
+                                    A new vendor payment request has been submitted and requires Finance Verification.
+                                {% else %}
+                                    A vendor payment request has completed Finance Verification and requires Final Approval.
+                                {% endif %}
                             </p>
                         </td>
                     </tr>
@@ -180,6 +193,26 @@
                         </td>
                     </tr>
 
+                    {% if is_final_approval_email %}
+                        <tr>
+                            <td style="padding:12px 28px;">
+                                <hr style="border:none; border-top:1px solid #e5e5e5; margin:0 0 16px 0;">
+
+                                <h3 style="margin:0 0 12px 0; font-size:16px; font-weight:600; color:#111111;">
+                                    Finance Verification Remark
+                                </h3>
+
+                                <div style="font-size:14px; line-height:1.6; color:#222222;">
+                                    {% if finance_verification_remark %}
+                                        {{ finance_verification_remark|linebreaksbr }}
+                                    {% else %}
+                                        -
+                                    {% endif %}
+                                </div>
+                            </td>
+                        </tr>
+                    {% endif %}
+
                     <tr>
                         <td style="padding:12px 28px;">
                             <hr style="border:none; border-top:1px solid #e5e5e5; margin:0 0 16px 0;">
@@ -222,7 +255,11 @@
                                     <td style="padding-right:10px; padding-bottom:10px;">
                                         <a href="{{ review_url }}"
                                            style="display:inline-block; padding:11px 18px; background-color:#1f4e79; color:#ffffff; text-decoration:none; border-radius:4px; font-size:14px; font-weight:600;">
-                                            Review Request
+                                            {% if is_final_approval_email %}
+                                                Approve
+                                            {% else %}
+                                                Review Request
+                                            {% endif %}
                                         </a>
                                     </td>
 

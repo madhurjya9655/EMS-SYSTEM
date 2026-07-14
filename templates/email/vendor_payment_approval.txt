@@ -1,6 +1,6 @@
-Vendor Payment Approval Required
+{% if is_finance_verification_email %}Vendor Payment Verification Required{% else %}Vendor Payment Approval Required{% endif %}
 
-A new vendor payment request has been submitted and requires review.
+{% if is_finance_verification_email %}A new vendor payment request has been submitted and requires Finance Verification.{% else %}A vendor payment request has completed Finance Verification and requires Final Approval.{% endif %}
 
 Request Information
 
@@ -65,6 +65,16 @@ Not Available
 No invoice rows found.
 {% endfor %}
 
+{% if is_final_approval_email %}
+Finance Verification Remark
+
+{% if finance_verification_remark %}
+{{ finance_verification_remark }}
+{% else %}
+-
+{% endif %}
+
+{% endif %}
 Bank Details
 
 Bank Details Attachment:
@@ -88,7 +98,7 @@ Bank Details Text:
 
 Actions
 
-Review Request:
+{% if is_final_approval_email %}Approve{% else %}Review Request{% endif %}:
 {{ review_url }}
 
 This is a system-generated email from BOS Lakshya ERP.
