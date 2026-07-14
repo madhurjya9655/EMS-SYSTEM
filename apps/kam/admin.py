@@ -9,7 +9,6 @@ from . import models
 # KAM Approval Email Settings
 # ---------------------------------------------------------------------------
 
-@admin.register(models.KAMEmailApprovalSettings)
 class KAMEmailApprovalSettingsAdmin(admin.ModelAdmin):
     """
     Admin page for managing KAM visit approval email recipients.
@@ -62,24 +61,23 @@ class KAMEmailApprovalSettingsAdmin(admin.ModelAdmin):
         super().save_model(request, obj, form, change)
 
     def has_add_permission(self, request):
-        """
-        Allow only one global settings record.
-        """
         return not models.KAMEmailApprovalSettings.objects.exists()
 
     def has_delete_permission(self, request, obj=None):
-        """
-        Prevent accidental deletion of the global settings row.
-        """
         return False
+
+
+# Register safely only if not already registered.
+if models.KAMEmailApprovalSettings not in admin.site._registry:
+    admin.site.register(
+        models.KAMEmailApprovalSettings,
+        KAMEmailApprovalSettingsAdmin,
+    )
 
 
 # ---------------------------------------------------------------------------
 # Core KAM Models
 # ---------------------------------------------------------------------------
-
-# Register core KAM models.
-# These are mostly read-heavy and write-minimal in Django Admin.
 
 CORE_KAM_MODELS = [
     models.Customer,
@@ -100,7 +98,5 @@ CORE_KAM_MODELS = [
 
 
 for model in CORE_KAM_MODELS:
-    try:
+    if model not in admin.site._registry:
         admin.site.register(model)
-    except admin.sites.AlreadyRegistered:
-        pass
