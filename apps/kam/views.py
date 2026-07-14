@@ -611,37 +611,55 @@ def _mapped_manager_for_kam(kam_user: User) -> Optional[User]:
         pass
 
     return None
-def _active_manager_for_kam(kam_user: User) -> Optional[User]:
+def _approval_to_users_for_kam(kam_user: User) -> List[User]:
     """
-    Resolve the primary TO recipient for KAM approval email.
+    Resolve every actionable approval recipient for a KAM visit email.
 
-    Priority:
-    1. Existing mapped manager when include_mapped_manager is enabled.
-    2. First active administrator-configured approval user.
-    3. Existing mapped manager as a safety fallback when settings are missing.
+    Rules:
+    - Users selected under "Approval Recipients" are TO recipients.
+    - The mapped manager is also a TO recipient only when
+      include_mapped_manager is enabled.
+    - Recipients are active, have an email address, and are deduplicated.
+    - When settings are unavailable/inactive, fall back to the mapped manager.
     """
+    if not kam_user or not getattr(kam_user, "id", None):
+        return []
+
     mapped_manager = _mapped_manager_for_kam(kam_user)
+    candidates: List[User] = []
 
     try:
         config = KAMEmailApprovalSettings.get_solo()
         if config.is_active:
+            candidates.extend(list(config.active_approval_users()))
             if config.include_mapped_manager and mapped_manager:
-                return mapped_manager
-            configured = config.active_approval_users()
-            if configured:
-                return configured[0]
-            if config.include_mapped_manager:
-                return mapped_manager
-            return None
+                candidates.append(mapped_manager)
+        elif mapped_manager:
+            candidates.append(mapped_manager)
     except Exception:
         logger.exception(
-            "KAM primary approval recipient settings lookup failed for employee_id=%s",
+            "KAM approval recipient settings lookup failed for employee_id=%s",
             getattr(kam_user, "id", None),
         )
+        if mapped_manager:
+            candidates.append(mapped_manager)
 
-    return mapped_manager
+    output: List[User] = []
+    seen = set()
+    for user in candidates:
+        email = (getattr(user, "email", "") or "").strip().lower()
+        if not user or not getattr(user, "is_active", False) or not email or email in seen:
+            continue
+        seen.add(email)
+        output.append(user)
+
+    return output
 
 
+def _active_manager_for_kam(kam_user: User) -> Optional[User]:
+    """Return the first actionable approval recipient for legacy call sites."""
+    recipients = _approval_to_users_for_kam(kam_user)
+    return recipients[0] if recipients else None
 
 def _configured_kam_email_recipients(kam_user: User) -> Tuple[List[User], List[User]]:
     """
@@ -686,27 +704,24 @@ def _configured_kam_email_recipients(kam_user: User) -> Tuple[List[User], List[U
 
 def _active_cc_for_kam(kam_user: User) -> List[User]:
     """
-    Resolve CC recipients for KAM visit approval email.
+    Resolve information-only CC recipients.
 
-    Live DB source:
-      ApproverMapping.employee = KAM / employee submitting visit
-      ApproverMapping.cc_person = single CC user
-      ApproverMapping.default_cc_users = multiple CC users
+    Sources:
+    - ApproverMapping.cc_person
+    - ApproverMapping.default_cc_users
+    - KAMEmailApprovalSettings.cc_users
 
-    Production rules:
-      - Read both cc_person and default_cc_users.
-      - Skip inactive users.
-      - Skip users with blank email.
-      - Remove duplicate emails.
-      - Never break visit submission if CC lookup fails.
+    Approval recipients are excluded because they are sent in TO.
     """
     if not kam_user or not getattr(kam_user, "id", None):
-        logger.warning("KAM CC Debug → invalid kam_user=%r", kam_user)
+        logger.warning("KAM CC Debug -> invalid kam_user=%r", kam_user)
         return []
+
+    candidates: List[User] = []
+    mapping_id = None
 
     try:
         from apps.leave.models import ApproverMapping
-
         mapping = (
             ApproverMapping.objects
             .select_related("employee", "reporting_person", "cc_person")
@@ -714,107 +729,56 @@ def _active_cc_for_kam(kam_user: User) -> List[User]:
             .filter(employee=kam_user)
             .first()
         )
-
-        if not mapping:
-            logger.warning(
-                "KAM CC Debug → no ApproverMapping found for employee_id=%s email=%s",
-                kam_user.id,
-                getattr(kam_user, "email", None),
-            )
-            configured_approval_users, configured_cc_users = _configured_kam_email_recipients(kam_user)
-            primary_manager = _active_manager_for_kam(kam_user)
-            primary_email = (getattr(primary_manager, "email", "") or "").strip().lower()
-            output = []
-            seen = set()
-            for extra_user in list(configured_approval_users) + list(configured_cc_users):
-                email = (getattr(extra_user, "email", "") or "").strip().lower()
-                if (
-                    not email
-                    or email == primary_email
-                    or email in seen
-                    or not getattr(extra_user, "is_active", False)
-                ):
-                    continue
-                seen.add(email)
-                output.append(extra_user)
-            return output
-
-        cc_candidates: List[User] = []
-
-        if getattr(mapping, "cc_person_id", None):
-            cc_candidates.append(mapping.cc_person)
-
-        try:
-            cc_candidates.extend(list(mapping.default_cc_users.all()))
-        except Exception:
-            logger.exception(
-                "KAM CC Debug → failed reading default_cc_users for employee_id=%s mapping_id=%s",
-                kam_user.id,
-                mapping.id,
-            )
-
-        final_cc_users: List[User] = []
-        seen_emails = set()
-
-        for cc_user in cc_candidates:
-            if not cc_user:
-                continue
-
-            cc_email = (getattr(cc_user, "email", "") or "").strip().lower()
-
-            if not cc_email:
-                logger.warning(
-                    "KAM CC Debug → skipping CC user with blank email. employee_id=%s cc_user_id=%s",
-                    kam_user.id,
-                    getattr(cc_user, "id", None),
-                )
-                continue
-
-            if not getattr(cc_user, "is_active", False):
-                logger.warning(
-                    "KAM CC Debug → skipping inactive CC user. employee_id=%s cc_user_id=%s cc_email=%s",
-                    kam_user.id,
-                    getattr(cc_user, "id", None),
-                    cc_email,
-                )
-                continue
-
-            if cc_email in seen_emails:
-                continue
-
-            seen_emails.add(cc_email)
-            final_cc_users.append(cc_user)
-
-        configured_approval_users, configured_cc_users = _configured_kam_email_recipients(kam_user)
-        primary_manager = _active_manager_for_kam(kam_user)
-        primary_email = (getattr(primary_manager, "email", "") or "").strip().lower()
-
-        for extra_user in list(configured_approval_users) + list(configured_cc_users):
-            if not extra_user or not getattr(extra_user, "is_active", False):
-                continue
-            extra_email = (getattr(extra_user, "email", "") or "").strip().lower()
-            if not extra_email or extra_email == primary_email or extra_email in seen_emails:
-                continue
-            seen_emails.add(extra_email)
-            final_cc_users.append(extra_user)
-
-        logger.info(
-            "KAM CC Debug → final CC resolved. employee_id=%s employee_email=%s mapping_id=%s cc_emails=%s",
-            kam_user.id,
-            getattr(kam_user, "email", None),
-            mapping.id,
-            [(u.email or "").strip() for u in final_cc_users],
-        )
-
-        return final_cc_users
-
+        if mapping:
+            mapping_id = mapping.id
+            if getattr(mapping, "cc_person_id", None):
+                candidates.append(mapping.cc_person)
+            candidates.extend(list(mapping.default_cc_users.all()))
     except Exception:
         logger.exception(
-            "_active_cc_for_kam failed for employee_id=%s email=%s",
+            "KAM CC mapping lookup failed for employee_id=%s",
             getattr(kam_user, "id", None),
-            getattr(kam_user, "email", None),
         )
-        return []
+
+    try:
+        config = KAMEmailApprovalSettings.get_solo()
+        if config.is_active:
+            candidates.extend(list(config.active_cc_users()))
+    except Exception:
+        logger.exception(
+            "KAM configured CC lookup failed for employee_id=%s",
+            getattr(kam_user, "id", None),
+        )
+
+    approval_emails = {
+        (getattr(user, "email", "") or "").strip().lower()
+        for user in _approval_to_users_for_kam(kam_user)
+        if (getattr(user, "email", "") or "").strip()
+    }
+
+    output: List[User] = []
+    seen = set()
+    for user in candidates:
+        email = (getattr(user, "email", "") or "").strip().lower()
+        if (
+            not user
+            or not getattr(user, "is_active", False)
+            or not email
+            or email in approval_emails
+            or email in seen
+        ):
+            continue
+        seen.add(email)
+        output.append(user)
+
+    logger.info(
+        "KAM CC Debug -> final CC resolved. employee_id=%s employee_email=%s mapping_id=%s cc_emails=%s",
+        getattr(kam_user, "id", None),
+        getattr(kam_user, "email", None),
+        mapping_id,
+        [(getattr(user, "email", "") or "").strip() for user in output],
+    )
+    return output
 
 def _kams_managed_by_manager(manager_user: User) -> List[int]:
     """
@@ -1881,9 +1845,10 @@ def _send_post_visit_completion_mail(
     Sends second email to manager after KAM submits post-visit details.
     Does not complete the workflow.
     """
-    manager_user = _active_manager_for_kam(plan.kam)
+    approval_to_users = _approval_to_users_for_kam(plan.kam)
+    manager_user = approval_to_users[0] if approval_to_users else None
 
-    if not manager_user or not getattr(manager_user, "email", None):
+    if not approval_to_users:
         logger.warning(
             "Post visit completion mail skipped. No active manager email. plan_id=%s kam_id=%s",
             getattr(plan, "id", None),
@@ -1914,7 +1879,7 @@ def _send_post_visit_completion_mail(
     sent_ok = _send_safe_mail(
         subject,
         body,
-        [manager_user],
+        approval_to_users,
         cc_users,
     )
 
@@ -4939,10 +4904,12 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
 
             proceed_flag = submit_action == "submit_to_manager"
             mgr_user = None
+            approval_to_users: List[User] = []
             cc_users: List[User] = []
 
             if proceed_flag:
-                mgr_user = _active_manager_for_kam(user)
+                approval_to_users = _approval_to_users_for_kam(user)
+                mgr_user = approval_to_users[0] if approval_to_users else None
 
                 if not mgr_user or not getattr(mgr_user, "email", None):
                     messages.error(
@@ -5126,7 +5093,7 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
                                     f"({fresh_batch.from_date}) - {user.get_full_name() or user.username}"
                                 )
 
-                                sent_ok = _send_safe_mail(subject, html_body, [mgr_user], cc_users)
+                                sent_ok = _send_safe_mail(subject, html_body, approval_to_users, cc_users)
 
                                 if not sent_ok:
                                     logger.warning(
@@ -5177,7 +5144,7 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
                                     cc_users=cc_users,
                                 )
 
-                                sent_ok = _send_safe_mail(subject, html_body, [mgr_user], cc_users)
+                                sent_ok = _send_safe_mail(subject, html_body, approval_to_users, cc_users)
 
                                 if not sent_ok:
                                     logger.warning(
@@ -5262,7 +5229,7 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
                                 reject_url=reject_url,
                                 cc_users=cc_users,
                             )
-                            sent_ok = _send_safe_mail(subject, html_body, [mgr_user], cc_users)
+                            sent_ok = _send_safe_mail(subject, html_body, approval_to_users, cc_users)
                             if not sent_ok:
                                 logger.warning("Approval email could not be sent for single visit #%s", fresh_plan.id)
                         except Exception:
@@ -5608,10 +5575,12 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
             )
 
             mgr_user = None
+            approval_to_users: List[User] = []
             cc_users: List[User] = []
 
             if proceed_flag:
-                mgr_user = _active_manager_for_kam(user)
+                approval_to_users = _approval_to_users_for_kam(user)
+                mgr_user = approval_to_users[0] if approval_to_users else None
 
                 if not mgr_user:
                     logger.warning(
@@ -5845,7 +5814,7 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
                             sent_ok = _send_safe_mail(
                                 subject,
                                 html_body,
-                                [mgr_user],
+                                approval_to_users,
                                 cc_users,
                             )
 

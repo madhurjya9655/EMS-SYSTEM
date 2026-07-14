@@ -65,6 +65,12 @@
   .bulk-customer-name { font-weight: 800; color: #0f172a; }
   .bulk-customer-meta { font-size: 12px; color: #64748b; margin-top: 2px; }
   .bulk-empty { padding: 22px; text-align: center; color: #64748b; border: 1px dashed #cbd5e1; border-radius: 14px; background: #f8fafc; }
+  .non-customer-wrap { display: none; margin-top: 18px; }
+  .non-customer-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; }
+  .non-customer-table { min-width: 900px; margin: 0; }
+  .non-customer-table th { background: #f8fafc; color: #475569; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; padding: 13px 12px; border-bottom: 1px solid #e2e8f0; }
+  .non-customer-table td { padding: 12px; vertical-align: top; border-bottom: 1px solid #edf2f7; }
+  .non-customer-table .form-control { min-height: 40px; border-radius: 10px; font-size: 13px; }
   .table-modern { margin: 0; min-width: 860px; }
   .table-modern thead th { position: sticky; top: 0; z-index: 1; background: #f8fafc; color: #475569; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; padding: 13px 14px; border-bottom: 1px solid #e2e8f0; }
   .table-modern tbody td { padding: 14px; vertical-align: middle; border-bottom: 1px solid #edf2f7; color: #334155; font-size: 13px; }
@@ -97,17 +103,6 @@
       <a href="{% url 'kam:dashboard' %}" class="kam-btn kam-btn-outline"><i class="fas fa-arrow-left"></i>Dashboard</a>
     </div>
   </div>
-
-  {% if messages %}
-    <div class="mb-3">
-      {% for message in messages %}
-        <div class="alert alert-{{ message.tags|default:'info' }} alert-dismissible fade show mb-2" role="alert">
-          {{ message }}
-          <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
-        </div>
-      {% endfor %}
-    </div>
-  {% endif %}
 
   <form method="post" novalidate id="bulkVisitForm" class="kam-card">
     {% csrf_token %}
@@ -236,9 +231,36 @@
             </div>
           </div>
         </div>
+
+        <div class="kam-field kam-field-wide non-customer-wrap" id="nonCustomerModeWrap">
+          <div class="non-customer-head">
+            <div>
+              <h3 class="customer-section-title mb-1">Non-Customer Visit Lines</h3>
+              <div class="kam-help">Add one or more supplier, vendor, warehouse, plant, or other counterparty visits.</div>
+            </div>
+            <button type="button" class="btn btn-outline-primary" id="addNonCustomerLineBtn">
+              <i class="fas fa-plus me-1"></i>Add Visit Line
+            </button>
+          </div>
+
+          <div class="table-responsive" id="nonCustomerLinesWrap">
+            <table class="table non-customer-table">
+              <thead>
+                <tr>
+                  <th style="width: 28%;">Counterparty Name <span class="required">*</span></th>
+                  <th style="width: 28%;">Location <span class="required">*</span></th>
+                  <th style="width: 36%;">Purpose of Visit <span class="required">*</span></th>
+                  <th style="width: 8%;" class="text-end">Action</th>
+                </tr>
+              </thead>
+              <tbody id="nonCustomerLinesBody"></tbody>
+            </table>
+          </div>
+          <div class="customer-validation-error" id="nonCustomerValidationError">Add at least one complete non-customer visit line.</div>
+        </div>
       </div>
 
-      <div class="mt-4">
+      <div class="mt-4" id="customerLinesSection">
         <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-2">
           <div>
             <h3 class="kam-card-title">Customer Visit Lines</h3>
@@ -382,6 +404,11 @@
 (function () {
   const categoryField = document.getElementById("id_batch-visit_category") || document.getElementById("id_visit_category");
   const customerModeWrap = document.getElementById("customerModeWrap");
+  const customerLinesSection = document.getElementById("customerLinesSection");
+  const nonCustomerModeWrap = document.getElementById("nonCustomerModeWrap");
+  const nonCustomerLinesBody = document.getElementById("nonCustomerLinesBody");
+  const addNonCustomerLineBtn = document.getElementById("addNonCustomerLineBtn");
+  const nonCustomerValidationError = document.getElementById("nonCustomerValidationError");
   const searchInput = document.getElementById("customerSearch");
   const optionsWrap = document.getElementById("customerOptions");
   const chipsWrap = document.getElementById("selectedCustomerChips");
@@ -405,6 +432,7 @@
   const bulkVisitForm = document.getElementById("bulkVisitForm");
   const selected = new Map();
   let manualCounter = 0;
+  let nonCustomerCounter = 0;
 
   function esc(value) {
     return String(value || "")
@@ -573,6 +601,23 @@
       </tr>`;
   }
 
+  function nonCustomerRowHtml(index) {
+    return `
+      <tr data-non-customer-row="${index}">
+        <td><input class="form-control" type="text" name="counterparty_name[]" maxlength="255" placeholder="Counterparty name" required></td>
+        <td><textarea class="form-control" name="counterparty_location[]" rows="2" placeholder="Location" required></textarea></td>
+        <td><textarea class="form-control non-customer-purpose" name="counterparty_purpose[]" rows="2" placeholder="Purpose of Visit" required>${esc(batchPurposeField ? batchPurposeField.value : "")}</textarea></td>
+        <td class="text-end"><button type="button" class="btn btn-sm btn-outline-danger" data-remove-non-customer="${index}"><i class="fas fa-trash"></i></button></td>
+      </tr>`;
+  }
+
+  function addNonCustomerRow() {
+    if (!nonCustomerLinesBody) return;
+    nonCustomerCounter += 1;
+    nonCustomerLinesBody.insertAdjacentHTML("beforeend", nonCustomerRowHtml(nonCustomerCounter));
+    if (nonCustomerValidationError) nonCustomerValidationError.style.display = "none";
+  }
+
   function renderSelected() {
     chipsWrap.innerHTML = "";
     hiddenWrap.innerHTML = "";
@@ -662,6 +707,26 @@
     });
   }
 
+  if (nonCustomerLinesBody) {
+    nonCustomerLinesBody.addEventListener("click", function (event) {
+      const removeButton = event.target.closest("[data-remove-non-customer]");
+      if (!removeButton) return;
+      const row = removeButton.closest("tr");
+      if (row) row.remove();
+      if (!nonCustomerLinesBody.querySelector("tr")) addNonCustomerRow();
+    });
+
+    nonCustomerLinesBody.addEventListener("input", function (event) {
+      if (event.target && event.target.classList.contains("non-customer-purpose")) {
+        event.target.dataset.userEdited = "1";
+      }
+    });
+  }
+
+  if (addNonCustomerLineBtn) {
+    addNonCustomerLineBtn.addEventListener("click", addNonCustomerRow);
+  }
+
   if (addManualCustomerBtn) {
     addManualCustomerBtn.addEventListener("click", async function () {
       const manualName = manualCustomerInput ? manualCustomerInput.value.trim() : "";
@@ -747,6 +812,13 @@
         textarea.value = value;
       }
     });
+    if (nonCustomerLinesBody) {
+      nonCustomerLinesBody.querySelectorAll(".non-customer-purpose").forEach(function (textarea) {
+        if (!textarea.dataset.userEdited || textarea.value.trim() === "") {
+          textarea.value = value;
+        }
+      });
+    }
   }
 
   if (batchPurposeField) {
@@ -764,32 +836,65 @@
 
   if (bulkVisitForm) {
     bulkVisitForm.addEventListener("submit", function (event) {
-      const hasRows = linesBody && linesBody.querySelectorAll("tr").length > 0;
-      const pendingManualName = manualCustomerInput && manualCustomerInput.value.trim();
+      const customerCategory = isCustomerCategory(categoryField ? categoryField.value : "");
 
-      if (!hasRows && !pendingManualName) {
-        event.preventDefault();
-        if (customerValidationError) {
-          customerValidationError.style.display = "block";
-          customerValidationError.textContent = "Please select at least one Existing Customer or add at least one New Customer.";
+      if (customerCategory) {
+        const hasRows = linesBody && linesBody.querySelectorAll("tr").length > 0;
+        const pendingManualName = manualCustomerInput && manualCustomerInput.value.trim();
+
+        if (!hasRows && !pendingManualName) {
+          event.preventDefault();
+          if (customerValidationError) {
+            customerValidationError.style.display = "block";
+            customerValidationError.textContent = "Please select at least one Existing Customer or add at least one New Customer.";
+          }
+          if (customerModeWrap) customerModeWrap.scrollIntoView({ behavior: "smooth", block: "center" });
+          return;
         }
-        if (customerModeWrap) customerModeWrap.scrollIntoView({ behavior: "smooth", block: "center" });
+
+        if (pendingManualName && addManualCustomerBtn) {
+          event.preventDefault();
+          if (customerValidationError) {
+            customerValidationError.style.display = "block";
+            customerValidationError.textContent = "Please click Save with Visit to create the New Customer before submitting.";
+          }
+          addManualCustomerBtn.focus();
+        }
         return;
       }
 
-      if (pendingManualName && addManualCustomerBtn) {
+      const nonCustomerRows = nonCustomerLinesBody ? Array.from(nonCustomerLinesBody.querySelectorAll("tr")) : [];
+      const completeRows = nonCustomerRows.filter(function (row) {
+        const name = row.querySelector('input[name="counterparty_name[]"]');
+        const location = row.querySelector('textarea[name="counterparty_location[]"]');
+        const purpose = row.querySelector('textarea[name="counterparty_purpose[]"]');
+        return name && location && purpose && name.value.trim() && location.value.trim() && purpose.value.trim();
+      });
+
+      if (!completeRows.length || completeRows.length !== nonCustomerRows.length) {
         event.preventDefault();
-        if (customerValidationError) {
-          customerValidationError.style.display = "block";
-          customerValidationError.textContent = "Please click Save with Visit to create the New Customer before submitting.";
+        if (nonCustomerValidationError) {
+          nonCustomerValidationError.style.display = "block";
+          nonCustomerValidationError.textContent = "Complete Counterparty Name, Location, and Purpose for every non-customer visit line.";
         }
-        addManualCustomerBtn.focus();
+        if (nonCustomerModeWrap) nonCustomerModeWrap.scrollIntoView({ behavior: "smooth", block: "center" });
       }
     });
   }
 
   function syncCategoryUI() {
-    if (customerModeWrap) customerModeWrap.style.display = "";
+    const customerCategory = isCustomerCategory(categoryField ? categoryField.value : "");
+
+    if (customerModeWrap) customerModeWrap.style.display = customerCategory ? "" : "none";
+    if (customerLinesSection) customerLinesSection.style.display = customerCategory ? "" : "none";
+    if (nonCustomerModeWrap) nonCustomerModeWrap.style.display = customerCategory ? "none" : "block";
+
+    if (!customerCategory && nonCustomerLinesBody && !nonCustomerLinesBody.querySelector("tr")) {
+      addNonCustomerRow();
+    }
+
+    if (customerValidationError) customerValidationError.style.display = "none";
+    if (nonCustomerValidationError) nonCustomerValidationError.style.display = "none";
   }
 
   if (categoryField) categoryField.addEventListener("change", syncCategoryUI);
