@@ -3,10 +3,15 @@
 <aside class="sidebar" id="appSidebar" aria-label="Main navigation">
     <div class="sidebar-inner">
         <div class="sidebar-brand">
-            <a href="{% url 'dashboard:home' %}" class="sidebar-brand-link" aria-label="BOS Lakshya Home">
+            <a href="{% url 'dashboard:home' %}"
+               class="sidebar-brand-link"
+               aria-label="BOS Lakshya Home">
+
                 <span class="sidebar-brand-logo">
-                    <img src="{% static 'images/bos_logo.png' %}" alt="BOS Lakshya">
+                    <img src="{% static 'images/bos_logo.png' %}"
+                         alt="BOS Lakshya">
                 </span>
+
                 <span class="sidebar-brand-text">
                     <strong>BOS Lakshya</strong>
                     <small>ERP System</small>
@@ -15,6 +20,7 @@
         </div>
 
         <nav class="sidebar-nav">
+
             <a href="{% url 'dashboard:home' %}"
                class="sidebar-link {% if request.resolver_match.app_name == 'dashboard' %}active{% endif %}">
                 <i class="fa-solid fa-house"></i>
@@ -35,16 +41,19 @@
                 {% endif %}
 
                 {% if user|has_any_permission:"leave_list,leave_apply,leave_pending_manager" or user|has_group:"Manager" or user|has_group:"HR" or user.is_superuser %}
+
                 <a href="{% url 'leave:dashboard' %}"
                    class="sidebar-link {% if request.resolver_match.app_name == 'leave' and request.resolver_match.url_name == 'dashboard' %}active{% endif %}">
                     <i class="fa-solid fa-gauge"></i>
                     <span>Leave Dashboard</span>
                 </a>
+
                 <a href="{% url 'leave:apply_leave' %}"
                    class="sidebar-link {% if request.resolver_match.url_name == 'apply_leave' %}active{% endif %}">
                     <i class="fa-solid fa-calendar-plus"></i>
                     <span>Apply Leave</span>
                 </a>
+
                 {% if user|has_permission:"leave_pending_manager" or user.is_superuser %}
                 <a href="{% url 'leave:manager_pending' %}"
                    class="sidebar-link {% if request.resolver_match.url_name == 'manager_pending' and request.resolver_match.app_name == 'leave' %}active{% endif %}">
@@ -52,6 +61,7 @@
                     <span>Manager Approvals</span>
                 </a>
                 {% endif %}
+
                 {% endif %}
             </div>
             {% endif %}
@@ -136,7 +146,7 @@
             {% endif %}
 
             {# ══ SALES / KAM ══════════════════════════════════════════════════ #}
-            {% if user|has_any_permission:"kam_dashboard,kam_plan,kam_visits,kam_customers,kam_reports,kam_manager,kam_targets,kam_targets_lines,kam_collections_plan,kam_sync_now,kam_sync_trigger,kam_sync_step" or user.is_superuser %}
+            {% if user|has_any_permission:"kam_dashboard,kam_plan,kam_visits,kam_customers,kam_reports,kam_manager,kam_targets,kam_targets_lines,kam_collections_plan,kam_sync_now,kam_sync_trigger,kam_sync_step" or user.is_superuser or user|has_group:"Admin" %}
             <div class="sidebar-group">
                 <div class="sidebar-group-label">Sales</div>
 
@@ -150,7 +160,7 @@
 
                 {% if user|has_permission:"kam_plan" or user.is_superuser %}
                 <a href="{% url 'kam:plan' %}"
-                   class="sidebar-link {% if request.resolver_match.url_name == 'plan' %}active{% endif %}">
+                   class="sidebar-link {% if request.resolver_match.app_name == 'kam' and request.resolver_match.url_name == 'plan' %}active{% endif %}">
                     <i class="fa-solid fa-calendar-plus"></i>
                     <span>Plan Visit</span>
                 </a>
@@ -158,7 +168,7 @@
 
                 {% if user|has_any_permission:"kam_plan,kam_manager,kam_visits,kam_call_new,kam_collection_new" or user.is_superuser %}
                 <a href="{% url 'kam:visit_batches' %}"
-                   class="sidebar-link {% if request.resolver_match.url_name == 'visit_batches' or request.resolver_match.url_name == 'visits' %}active{% endif %}">
+                   class="sidebar-link {% if request.resolver_match.app_name == 'kam' and request.resolver_match.url_name == 'visit_batches' or request.resolver_match.app_name == 'kam' and request.resolver_match.url_name == 'visits' %}active{% endif %}">
                     <i class="fa-solid fa-clock-rotate-left"></i>
                     <span>Visit History</span>
                 </a>
@@ -166,7 +176,7 @@
 
                 {% if user|has_permission:"kam_manager" or user.is_superuser %}
                 <a href="{% url 'kam:manager_view' %}"
-                   class="sidebar-link {% if request.resolver_match.url_name == 'manager_view' %}active{% endif %}">
+                   class="sidebar-link {% if request.resolver_match.app_name == 'kam' and request.resolver_match.url_name == 'manager_view' %}active{% endif %}">
                     <i class="fa-solid fa-chart-column"></i>
                     <span>Manager View</span>
                 </a>
@@ -174,7 +184,7 @@
 
                 {% if user|has_permission:"kam_customers" or user.is_superuser %}
                 <a href="{% url 'kam:customers' %}"
-                   class="sidebar-link {% if request.resolver_match.url_name == 'customers' %}active{% endif %}">
+                   class="sidebar-link {% if request.resolver_match.app_name == 'kam' and request.resolver_match.url_name == 'customers' %}active{% endif %}">
                     <i class="fa-solid fa-address-book"></i>
                     <span>Customer 360</span>
                 </a>
@@ -182,7 +192,7 @@
 
                 {% if user|has_any_permission:"kam_targets,kam_targets_lines" or user.is_superuser %}
                 <a href="{% url 'kam:targets' %}"
-                   class="sidebar-link {% if request.resolver_match.url_name == 'targets' %}active{% endif %}">
+                   class="sidebar-link {% if request.resolver_match.app_name == 'kam' and request.resolver_match.url_name == 'targets' %}active{% endif %}">
                     <i class="fa-solid fa-bullseye"></i>
                     <span>Targets</span>
                 </a>
@@ -190,7 +200,7 @@
 
                 {% if user|has_permission:"kam_collections_plan" or user.is_superuser %}
                 <a href="{% url 'kam:collections_plan' %}"
-                   class="sidebar-link {% if request.resolver_match.url_name == 'collections_plan' %}active{% endif %}">
+                   class="sidebar-link {% if request.resolver_match.app_name == 'kam' and request.resolver_match.url_name == 'collections_plan' %}active{% endif %}">
                     <i class="fa-solid fa-money-bill-wave"></i>
                     <span>Collections Plan</span>
                 </a>
@@ -198,25 +208,35 @@
 
                 {% if user|has_permission:"kam_manager" or user.is_superuser %}
                 <a href="{% url 'kam:collection_report' %}"
-                   class="sidebar-link {% if request.resolver_match.url_name == 'collection_report' %}active{% endif %}">
+                   class="sidebar-link {% if request.resolver_match.app_name == 'kam' and request.resolver_match.url_name == 'collection_report' %}active{% endif %}">
                     <i class="fa-solid fa-chart-bar"></i>
                     <span>Collection Report</span>
                 </a>
                 {% endif %}
 
                 {% if user|has_any_permission:"kam_sync_now,kam_sync_trigger,kam_sync_step" or user.is_superuser %}
-                <a href="{% url 'kam:sync_now' %}" class="sidebar-link">
+                <a href="{% url 'kam:sync_now' %}"
+                   class="sidebar-link {% if request.resolver_match.app_name == 'kam' and request.resolver_match.url_name == 'sync_now' %}active{% endif %}">
                     <i class="fa-solid fa-rotate"></i>
                     <span>Sync Now</span>
                 </a>
                 {% endif %}
 
-                {% if user.is_superuser %}
+                {# ── Administrator-only KAM configuration ─────────────────── #}
+                {% if user.is_superuser or user|has_group:"Admin" %}
+
                 <a href="{% url 'kam:admin_kam_manager_mapping' %}"
-                   class="sidebar-link {% if request.resolver_match.url_name == 'admin_kam_manager_mapping' %}active{% endif %}">
+                   class="sidebar-link {% if request.resolver_match.app_name == 'kam' and request.resolver_match.url_name == 'admin_kam_manager_mapping' %}active{% endif %}">
                     <i class="fa-solid fa-user-shield"></i>
                     <span>KAM → Manager</span>
                 </a>
+
+                <a href="{% url 'kam:admin_kam_email_settings' %}"
+                   class="sidebar-link {% if request.resolver_match.app_name == 'kam' and request.resolver_match.url_name == 'admin_kam_email_settings' %}active{% endif %}">
+                    <i class="fa-solid fa-envelope-circle-check"></i>
+                    <span>Approval Emails</span>
+                </a>
+
                 {% endif %}
 
                 <a href="https://script.google.com/a/macros/blueoceansteels.com/s/AKfycbxyvMlqCjXAX3MOkds3qwt75ehe7T0bHqUuI84A64r_h8SgYGbY3hzbVuTbYSf7dFgK5w/exec"

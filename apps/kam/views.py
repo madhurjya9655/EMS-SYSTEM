@@ -3755,7 +3755,301 @@ def admin_kam_manager_mapping(request: HttpRequest) -> HttpResponse:
     }
     return render(request, "kam/admin_kam_manager_mapping.html", ctx)
 
+# =====================================================================
+# ADMIN: KAM Approval Email Settings
+# =====================================================================
 
+@login_required(login_url="/accounts/login/")
+def admin_kam_email_settings(request: HttpRequest) -> HttpResponse:
+    """
+    Administrator-only page for controlling KAM approval email recipients.
+
+    Administrator can configure:
+    - Approval recipients
+    - CC recipients
+    - Whether the employee's mapped manager is included
+    - Whether the configuration is active
+
+    This page updates the existing KAMEmailApprovalSettings singleton.
+    It does not create a second workflow or duplicate recipient table.
+    """
+
+    if not _is_admin(request.user):
+        return HttpResponseForbidden(
+            "403 Forbidden: Admin access required."
+        )
+
+    try:
+        config = KAMEmailApprovalSettings.get_solo()
+    except Exception:
+        logger.exception(
+            "Unable to load KAMEmailApprovalSettings singleton."
+        )
+
+        messages.error(
+            request,
+            "KAM approval email settings could not be loaded."
+        )
+
+        return redirect(
+            reverse("kam:admin_kam_manager_mapping")
+        )
+
+    active_users = (
+        User.objects
+        .filter(
+            is_active=True,
+        )
+        .exclude(
+            email__isnull=True,
+        )
+        .exclude(
+            email__exact="",
+        )
+        .order_by(
+            "first_name",
+            "last_name",
+            "email",
+            "id",
+        )
+    )
+
+    if request.method == "POST":
+        action = (
+            request.POST.get("action")
+            or "save"
+        ).strip().lower()
+
+        if action != "save":
+            messages.error(
+                request,
+                "Unknown settings action."
+            )
+
+            return redirect(
+                reverse("kam:admin_kam_email_settings")
+            )
+
+        approval_user_ids = [
+            value
+            for value in request.POST.getlist("approval_users")
+            if str(value).isdigit()
+        ]
+
+        cc_user_ids = [
+            value
+            for value in request.POST.getlist("cc_users")
+            if str(value).isdigit()
+        ]
+
+        include_mapped_manager = (
+            request.POST.get("include_mapped_manager") == "on"
+        )
+
+        is_active = (
+            request.POST.get("is_active") == "on"
+        )
+
+        approval_users = list(
+            User.objects
+            .filter(
+                id__in=approval_user_ids,
+                is_active=True,
+            )
+            .exclude(
+                email__isnull=True,
+            )
+            .exclude(
+                email__exact="",
+            )
+            .order_by(
+                "first_name",
+                "last_name",
+                "email",
+            )
+        )
+
+        cc_users = list(
+            User.objects
+            .filter(
+                id__in=cc_user_ids,
+                is_active=True,
+            )
+            .exclude(
+                email__isnull=True,
+            )
+            .exclude(
+                email__exact="",
+            )
+            .order_by(
+                "first_name",
+                "last_name",
+                "email",
+            )
+        )
+
+        approval_email_keys = {
+            (user.email or "").strip().lower()
+            for user in approval_users
+            if (user.email or "").strip()
+        }
+
+        filtered_cc_users = []
+
+        for cc_user in cc_users:
+            email_key = (
+                cc_user.email
+                or ""
+            ).strip().lower()
+
+            if not email_key:
+                continue
+
+            if email_key in approval_email_keys:
+                continue
+
+            filtered_cc_users.append(cc_user)
+
+        if (
+            is_active
+            and not approval_users
+            and not include_mapped_manager
+        ):
+            messages.error(
+                request,
+                "Select at least one Approval Recipient or enable "
+                "'Include Mapped Manager'."
+            )
+
+            return redirect(
+                reverse("kam:admin_kam_email_settings")
+            )
+
+        try:
+            with transaction.atomic():
+                config.approval_users.set(
+                    approval_users
+                )
+
+                config.cc_users.set(
+                    filtered_cc_users
+                )
+
+                config.include_mapped_manager = (
+                    include_mapped_manager
+                )
+
+                config.is_active = is_active
+
+                if hasattr(config, "updated_by"):
+                    config.updated_by = request.user
+
+                config.save()
+
+        except Exception:
+            logger.exception(
+                "Unable to update KAM approval email settings. "
+                "actor_id=%s",
+                getattr(request.user, "id", None),
+            )
+
+            messages.error(
+                request,
+                "The settings could not be saved. "
+                "Please check the server logs."
+            )
+
+            return redirect(
+                reverse("kam:admin_kam_email_settings")
+            )
+
+        logger.info(
+            "KAM approval email settings updated. "
+            "actor_id=%s approval_emails=%s cc_emails=%s "
+            "include_mapped_manager=%s is_active=%s",
+            getattr(request.user, "id", None),
+            [
+                (user.email or "").strip()
+                for user in approval_users
+            ],
+            [
+                (user.email or "").strip()
+                for user in filtered_cc_users
+            ],
+            include_mapped_manager,
+            is_active,
+        )
+
+        messages.success(
+            request,
+            "KAM approval email settings updated successfully."
+        )
+
+        return redirect(
+            reverse("kam:admin_kam_email_settings")
+        )
+
+    selected_approval_user_ids = set(
+        config.approval_users.values_list(
+            "id",
+            flat=True,
+        )
+    )
+
+    selected_cc_user_ids = set(
+        config.cc_users.values_list(
+            "id",
+            flat=True,
+        )
+    )
+
+    current_approval_users = list(
+        config.approval_users
+        .filter(is_active=True)
+        .order_by(
+            "first_name",
+            "last_name",
+            "email",
+        )
+    )
+
+    current_cc_users = list(
+        config.cc_users
+        .filter(is_active=True)
+        .order_by(
+            "first_name",
+            "last_name",
+            "email",
+        )
+    )
+
+    context = {
+        "page_title": "KAM Approval Email Settings",
+        "config": config,
+        "active_users": active_users,
+
+        "selected_approval_user_ids": (
+            selected_approval_user_ids
+        ),
+
+        "selected_cc_user_ids": (
+            selected_cc_user_ids
+        ),
+
+        "current_approval_users": (
+            current_approval_users
+        ),
+
+        "current_cc_users": (
+            current_cc_users
+        ),
+    }
+
+    return render(
+        request,
+        "kam/admin_kam_email_settings.html",
+        context,
+    )
 # =====================================================================
 # DASHBOARD
 # =====================================================================

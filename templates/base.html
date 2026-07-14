@@ -1193,10 +1193,17 @@
         </a>
         {% endif %}
 
-        {% if user.is_superuser %}
+        {% if user.is_superuser or user|has_group:"Admin" %}
+        <span class="sub-section-label">Administration</span>
+
         <a href="{% url 'kam:admin_kam_manager_mapping' %}"
-           class="sub-link {% if request.resolver_match.url_name == 'admin_kam_manager_mapping' %}active{% endif %}">
+           class="sub-link {% if request.resolver_match.app_name == 'kam' and request.resolver_match.url_name == 'admin_kam_manager_mapping' %}active{% endif %}">
           <i class="fa-solid fa-user-shield"></i> KAM → Manager
+        </a>
+
+        <a href="{% url 'kam:admin_kam_email_settings' %}"
+           class="sub-link {% if request.resolver_match.app_name == 'kam' and request.resolver_match.url_name == 'admin_kam_email_settings' %}active{% endif %}">
+          <i class="fa-solid fa-envelope-circle-check"></i> Approval Emails
         </a>
         {% endif %}
 

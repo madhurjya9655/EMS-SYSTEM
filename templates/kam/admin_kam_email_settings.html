@@ -1,0 +1,709 @@
+{% extends "base.html" %}
+{% load static user_filters %}
+
+{% block title %}
+KAM Approval Email Settings | BOS Lakshya
+{% endblock %}
+
+{% block navbar_title %}
+KAM Approval Email Settings
+{% endblock %}
+
+{% block breadcrumb %}
+KAM Approval Email Settings
+{% endblock %}
+
+{% block page_title %}
+KAM Approval Email Settings
+{% endblock %}
+
+{% block head_extra %}
+<style>
+  .kam-email-settings-page {
+    max-width: 1180px;
+    margin: 0 auto;
+  }
+
+  .settings-summary {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 14px;
+    margin-bottom: 20px;
+  }
+
+  .summary-card {
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    background: var(--surface);
+    padding: 16px;
+    box-shadow: var(--shadow-xs);
+  }
+
+  .summary-label {
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .05em;
+    margin-bottom: 5px;
+  }
+
+  .summary-value {
+    color: var(--text);
+    font-size: 18px;
+    font-weight: 800;
+    font-family: var(--font-display);
+  }
+
+  .summary-note {
+    color: var(--muted);
+    font-size: 12px;
+    margin-top: 4px;
+  }
+
+  .settings-card {
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    background: var(--surface);
+    box-shadow: var(--shadow-sm);
+    overflow: hidden;
+  }
+
+  .settings-card-header {
+    padding: 18px 20px;
+    border-bottom: 1px solid var(--border-light);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .settings-card-icon {
+    width: 42px;
+    height: 42px;
+    border-radius: 12px;
+    background: var(--primary-soft);
+    color: var(--primary);
+    display: grid;
+    place-items: center;
+    font-size: 18px;
+    flex-shrink: 0;
+  }
+
+  .settings-card-title {
+    margin: 0;
+    font-family: var(--font-display);
+    font-size: 17px;
+    font-weight: 800;
+    color: var(--text);
+  }
+
+  .settings-card-subtitle {
+    color: var(--muted);
+    font-size: 12.5px;
+    margin-top: 3px;
+  }
+
+  .settings-card-body {
+    padding: 20px;
+  }
+
+  .info-box {
+    border: 1px solid #bfdbfe;
+    background: #eff6ff;
+    color: #1d4ed8;
+    border-radius: 12px;
+    padding: 14px 16px;
+    margin-bottom: 20px;
+    font-size: 13px;
+  }
+
+  .info-box strong {
+    display: block;
+    margin-bottom: 6px;
+  }
+
+  .info-box ul {
+    margin: 0;
+    padding-left: 18px;
+  }
+
+  .info-box li + li {
+    margin-top: 4px;
+  }
+
+  .recipient-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 20px;
+  }
+
+  .recipient-panel {
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    background: var(--surface-alt);
+    overflow: hidden;
+  }
+
+  .recipient-panel-header {
+    padding: 14px 16px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .recipient-panel-title {
+    font-weight: 800;
+    color: var(--text);
+    font-size: 14px;
+  }
+
+  .recipient-panel-help {
+    color: var(--muted);
+    font-size: 12px;
+    margin-top: 3px;
+  }
+
+  .recipient-list {
+    max-height: 430px;
+    overflow-y: auto;
+    padding: 10px;
+  }
+
+  .recipient-option {
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+    padding: 10px;
+    border-radius: 10px;
+    cursor: pointer;
+    transition: background .18s ease;
+  }
+
+  .recipient-option:hover {
+    background: var(--primary-soft);
+  }
+
+  .recipient-option + .recipient-option {
+    border-top: 1px solid var(--border-light);
+  }
+
+  .recipient-option input {
+    margin-top: 4px;
+    width: 16px;
+    height: 16px;
+    flex-shrink: 0;
+  }
+
+  .recipient-name {
+    color: var(--text);
+    font-size: 13px;
+    font-weight: 700;
+  }
+
+  .recipient-email {
+    color: var(--muted);
+    font-size: 12px;
+    word-break: break-all;
+  }
+
+  .recipient-username {
+    color: var(--subtle);
+    font-size: 11px;
+    margin-top: 2px;
+  }
+
+  .switch-section {
+    margin-top: 20px;
+    border-top: 1px solid var(--border-light);
+    padding-top: 18px;
+  }
+
+  .switch-row {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 20px;
+    padding: 14px 0;
+  }
+
+  .switch-row + .switch-row {
+    border-top: 1px solid var(--border-light);
+  }
+
+  .switch-copy {
+    min-width: 0;
+  }
+
+  .switch-title {
+    font-weight: 800;
+    color: var(--text);
+    font-size: 13.5px;
+  }
+
+  .switch-description {
+    color: var(--muted);
+    font-size: 12px;
+    margin-top: 3px;
+  }
+
+  .settings-switch {
+    position: relative;
+    display: inline-block;
+    width: 48px;
+    height: 26px;
+    flex-shrink: 0;
+  }
+
+  .settings-switch input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+  }
+
+  .settings-slider {
+    position: absolute;
+    inset: 0;
+    cursor: pointer;
+    background: #d1d5db;
+    transition: .2s;
+    border-radius: 999px;
+  }
+
+  .settings-slider::before {
+    content: "";
+    position: absolute;
+    width: 20px;
+    height: 20px;
+    left: 3px;
+    top: 3px;
+    background: white;
+    transition: .2s;
+    border-radius: 50%;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, .2);
+  }
+
+  .settings-switch input:checked + .settings-slider {
+    background: var(--primary);
+  }
+
+  .settings-switch input:checked + .settings-slider::before {
+    transform: translateX(22px);
+  }
+
+  .current-config {
+    margin-top: 20px;
+    padding: 16px;
+    background: var(--surface-alt);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+  }
+
+  .current-config-title {
+    font-weight: 800;
+    color: var(--text);
+    margin-bottom: 10px;
+  }
+
+  .current-config-row {
+    display: grid;
+    grid-template-columns: 180px minmax(0, 1fr);
+    gap: 12px;
+    padding: 8px 0;
+  }
+
+  .current-config-row + .current-config-row {
+    border-top: 1px solid var(--border-light);
+  }
+
+  .current-config-label {
+    font-size: 12px;
+    color: var(--muted);
+    font-weight: 700;
+  }
+
+  .current-config-value {
+    font-size: 12.5px;
+    color: var(--text);
+  }
+
+  .email-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    background: var(--primary-soft);
+    color: var(--primary-dark);
+    border: 1px solid var(--primary-border);
+    padding: 4px 8px;
+    border-radius: 999px;
+    margin: 2px 4px 2px 0;
+    font-size: 11.5px;
+    font-weight: 700;
+  }
+
+  .empty-value {
+    color: var(--subtle);
+    font-style: italic;
+  }
+
+  .settings-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    border-top: 1px solid var(--border-light);
+    margin-top: 20px;
+    padding-top: 18px;
+  }
+
+  @media (max-width: 900px) {
+    .settings-summary {
+      grid-template-columns: 1fr;
+    }
+
+    .recipient-grid {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  @media (max-width: 576px) {
+    .settings-card-header,
+    .settings-card-body {
+      padding: 14px;
+    }
+
+    .current-config-row {
+      grid-template-columns: 1fr;
+      gap: 4px;
+    }
+
+    .switch-row {
+      align-items: center;
+    }
+
+    .settings-actions {
+      flex-direction: column-reverse;
+    }
+
+    .settings-actions .btn {
+      width: 100%;
+    }
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="kam-email-settings-page">
+
+  <div class="settings-summary">
+    <div class="summary-card">
+      <div class="summary-label">Approval Recipients</div>
+      <div class="summary-value">
+        {{ current_approval_users|length }}
+      </div>
+      <div class="summary-note">
+        Configured direct approval recipients
+      </div>
+    </div>
+
+    <div class="summary-card">
+      <div class="summary-label">CC Recipients</div>
+      <div class="summary-value">
+        {{ current_cc_users|length }}
+      </div>
+      <div class="summary-note">
+        Additional information recipients
+      </div>
+    </div>
+
+    <div class="summary-card">
+      <div class="summary-label">Settings Status</div>
+      <div class="summary-value">
+        {% if config.is_active %}
+          Active
+        {% else %}
+          Inactive
+        {% endif %}
+      </div>
+      <div class="summary-note">
+        {% if config.include_mapped_manager %}
+          Mapped manager is included
+        {% else %}
+          Mapped manager is not included
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <form method="post"
+        action="{% url 'kam:admin_kam_email_settings' %}">
+    {% csrf_token %}
+
+    <input type="hidden"
+           name="action"
+           value="save">
+
+    <section class="settings-card">
+      <div class="settings-card-header">
+        <div class="settings-card-icon">
+          <i class="fa-solid fa-envelope-circle-check"></i>
+        </div>
+
+        <div>
+          <h2 class="settings-card-title">
+            Approval Email Recipients
+          </h2>
+
+          <div class="settings-card-subtitle">
+            Select who receives KAM visit approval emails.
+          </div>
+        </div>
+      </div>
+
+      <div class="settings-card-body">
+
+        <div class="info-box">
+          <strong>How this configuration works</strong>
+
+          <ul>
+            <li>
+              Approval recipients receive the actionable approval email.
+            </li>
+
+            <li>
+              CC recipients receive the same email as information.
+            </li>
+
+            <li>
+              When Include Mapped Manager is enabled, the employee’s mapped
+              KAM manager is also included.
+            </li>
+
+            <li>
+              A user selected as an approval recipient is automatically removed
+              from CC to prevent duplicate delivery.
+            </li>
+          </ul>
+        </div>
+
+        <div class="recipient-grid">
+
+          <div class="recipient-panel">
+            <div class="recipient-panel-header">
+              <div class="recipient-panel-title">
+                Approval Recipients
+              </div>
+
+              <div class="recipient-panel-help">
+                These users receive approval and rejection buttons.
+              </div>
+            </div>
+
+            <div class="recipient-list">
+              {% for account in active_users %}
+              <label class="recipient-option">
+                <input type="checkbox"
+                       name="approval_users"
+                       value="{{ account.id }}"
+                       {% if account.id in selected_approval_user_ids %}checked{% endif %}>
+
+                <span>
+                  <span class="recipient-name">
+                    {{ account.get_full_name|default:account.username }}
+                  </span>
+
+                  <span class="recipient-email">
+                    {{ account.email }}
+                  </span>
+
+                  <span class="recipient-username">
+                    Username: {{ account.username }}
+                  </span>
+                </span>
+              </label>
+              {% empty %}
+              <div class="p-3 text-muted">
+                No active users with email addresses were found.
+              </div>
+              {% endfor %}
+            </div>
+          </div>
+
+          <div class="recipient-panel">
+            <div class="recipient-panel-header">
+              <div class="recipient-panel-title">
+                CC Recipients
+              </div>
+
+              <div class="recipient-panel-help">
+                These users receive the message for information.
+              </div>
+            </div>
+
+            <div class="recipient-list">
+              {% for account in active_users %}
+              <label class="recipient-option">
+                <input type="checkbox"
+                       name="cc_users"
+                       value="{{ account.id }}"
+                       {% if account.id in selected_cc_user_ids %}checked{% endif %}>
+
+                <span>
+                  <span class="recipient-name">
+                    {{ account.get_full_name|default:account.username }}
+                  </span>
+
+                  <span class="recipient-email">
+                    {{ account.email }}
+                  </span>
+
+                  <span class="recipient-username">
+                    Username: {{ account.username }}
+                  </span>
+                </span>
+              </label>
+              {% empty %}
+              <div class="p-3 text-muted">
+                No active users with email addresses were found.
+              </div>
+              {% endfor %}
+            </div>
+          </div>
+
+        </div>
+
+        <div class="switch-section">
+
+          <div class="switch-row">
+            <div class="switch-copy">
+              <div class="switch-title">
+                Include Mapped Manager
+              </div>
+
+              <div class="switch-description">
+                Also send the actionable approval email to the manager assigned
+                on the KAM → Manager page.
+              </div>
+            </div>
+
+            <label class="settings-switch">
+              <input type="checkbox"
+                     name="include_mapped_manager"
+                     {% if config.include_mapped_manager %}checked{% endif %}>
+
+              <span class="settings-slider"></span>
+            </label>
+          </div>
+
+          <div class="switch-row">
+            <div class="switch-copy">
+              <div class="switch-title">
+                Enable KAM Approval Email Configuration
+              </div>
+
+              <div class="switch-description">
+                When disabled, the configured approval and CC recipients are
+                ignored by the email recipient resolver.
+              </div>
+            </div>
+
+            <label class="settings-switch">
+              <input type="checkbox"
+                     name="is_active"
+                     {% if config.is_active %}checked{% endif %}>
+
+              <span class="settings-slider"></span>
+            </label>
+          </div>
+
+        </div>
+
+        <div class="current-config">
+          <div class="current-config-title">
+            Current Saved Configuration
+          </div>
+
+          <div class="current-config-row">
+            <div class="current-config-label">
+              Approval Recipients
+            </div>
+
+            <div class="current-config-value">
+              {% for account in current_approval_users %}
+                <span class="email-pill">
+                  <i class="fa-solid fa-user-check"></i>
+                  {{ account.email }}
+                </span>
+              {% empty %}
+                <span class="empty-value">
+                  No approval recipients selected
+                </span>
+              {% endfor %}
+            </div>
+          </div>
+
+          <div class="current-config-row">
+            <div class="current-config-label">
+              CC Recipients
+            </div>
+
+            <div class="current-config-value">
+              {% for account in current_cc_users %}
+                <span class="email-pill">
+                  <i class="fa-solid fa-copy"></i>
+                  {{ account.email }}
+                </span>
+              {% empty %}
+                <span class="empty-value">
+                  No CC recipients selected
+                </span>
+              {% endfor %}
+            </div>
+          </div>
+
+          <div class="current-config-row">
+            <div class="current-config-label">
+              Include Mapped Manager
+            </div>
+
+            <div class="current-config-value">
+              {% if config.include_mapped_manager %}
+                Yes
+              {% else %}
+                No
+              {% endif %}
+            </div>
+          </div>
+
+          <div class="current-config-row">
+            <div class="current-config-label">
+              Configuration Active
+            </div>
+
+            <div class="current-config-value">
+              {% if config.is_active %}
+                Yes
+              {% else %}
+                No
+              {% endif %}
+            </div>
+          </div>
+        </div>
+
+        <div class="settings-actions">
+          <a href="{% url 'kam:admin_kam_manager_mapping' %}"
+             class="btn btn-outline-primary">
+            <i class="fa-solid fa-arrow-left"></i>
+            KAM → Manager
+          </a>
+
+          <button type="submit"
+                  class="btn btn-primary">
+            <i class="fa-solid fa-floppy-disk"></i>
+            Save Email Settings
+          </button>
+        </div>
+
+      </div>
+    </section>
+  </form>
+
+</div>
+{% endblock %}
