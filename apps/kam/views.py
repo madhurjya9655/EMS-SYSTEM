@@ -87,6 +87,7 @@ from .models import (
     VisitBatch,
     KamManagerMapping,
     KAMAssignment,
+    KAMEmailApprovalSettings,
 )
 
 from . import sheets
@@ -569,7 +570,7 @@ def _parse_batch_token(token: str) -> Tuple[int, str]:
 # ─────────────────────────────────────────────────────────────────────────────
 # Manager / KAM lookup helpers
 # ─────────────────────────────────────────────────────────────────────────────
-def _active_manager_for_kam(kam_user: User) -> Optional[User]:
+def _mapped_manager_for_kam(kam_user: User) -> Optional[User]:
     if not kam_user or not getattr(kam_user, "id", None):
         return None
 
@@ -610,6 +611,78 @@ def _active_manager_for_kam(kam_user: User) -> Optional[User]:
         pass
 
     return None
+def _active_manager_for_kam(kam_user: User) -> Optional[User]:
+    """
+    Resolve the primary TO recipient for KAM approval email.
+
+    Priority:
+    1. Existing mapped manager when include_mapped_manager is enabled.
+    2. First active administrator-configured approval user.
+    3. Existing mapped manager as a safety fallback when settings are missing.
+    """
+    mapped_manager = _mapped_manager_for_kam(kam_user)
+
+    try:
+        config = KAMEmailApprovalSettings.get_solo()
+        if config.is_active:
+            if config.include_mapped_manager and mapped_manager:
+                return mapped_manager
+            configured = config.active_approval_users()
+            if configured:
+                return configured[0]
+            if config.include_mapped_manager:
+                return mapped_manager
+            return None
+    except Exception:
+        logger.exception(
+            "KAM primary approval recipient settings lookup failed for employee_id=%s",
+            getattr(kam_user, "id", None),
+        )
+
+    return mapped_manager
+
+
+
+def _configured_kam_email_recipients(kam_user: User) -> Tuple[List[User], List[User]]:
+    """
+    Resolve administrator-managed KAM approval and CC users.
+
+    Returns:
+      (approval_users, cc_users)
+
+    The mapped manager is kept as the primary TO recipient by existing call
+    sites. Additional approval users are merged into CC so they receive the
+    same actionable Approve/Reject links. Because the signed action token is
+    batch/visit based, the first approver action completes the request and
+    later clicks see the already-processed state.
+    """
+    if not kam_user or not getattr(kam_user, "id", None):
+        return [], []
+
+    try:
+        config = KAMEmailApprovalSettings.get_solo()
+    except Exception:
+        logger.exception(
+            "KAM email settings lookup failed for employee_id=%s",
+            getattr(kam_user, "id", None),
+        )
+        return [], []
+
+    if not config.is_active:
+        return [], []
+
+    try:
+        approval_users = config.active_approval_users()
+        cc_users = config.active_cc_users()
+    except Exception:
+        logger.exception(
+            "KAM email settings recipient lookup failed for employee_id=%s",
+            getattr(kam_user, "id", None),
+        )
+        return [], []
+
+    return approval_users, cc_users
+
 
 def _active_cc_for_kam(kam_user: User) -> List[User]:
     """
@@ -648,7 +721,23 @@ def _active_cc_for_kam(kam_user: User) -> List[User]:
                 kam_user.id,
                 getattr(kam_user, "email", None),
             )
-            return []
+            configured_approval_users, configured_cc_users = _configured_kam_email_recipients(kam_user)
+            primary_manager = _active_manager_for_kam(kam_user)
+            primary_email = (getattr(primary_manager, "email", "") or "").strip().lower()
+            output = []
+            seen = set()
+            for extra_user in list(configured_approval_users) + list(configured_cc_users):
+                email = (getattr(extra_user, "email", "") or "").strip().lower()
+                if (
+                    not email
+                    or email == primary_email
+                    or email in seen
+                    or not getattr(extra_user, "is_active", False)
+                ):
+                    continue
+                seen.add(email)
+                output.append(extra_user)
+            return output
 
         cc_candidates: List[User] = []
 
@@ -695,6 +784,19 @@ def _active_cc_for_kam(kam_user: User) -> List[User]:
 
             seen_emails.add(cc_email)
             final_cc_users.append(cc_user)
+
+        configured_approval_users, configured_cc_users = _configured_kam_email_recipients(kam_user)
+        primary_manager = _active_manager_for_kam(kam_user)
+        primary_email = (getattr(primary_manager, "email", "") or "").strip().lower()
+
+        for extra_user in list(configured_approval_users) + list(configured_cc_users):
+            if not extra_user or not getattr(extra_user, "is_active", False):
+                continue
+            extra_email = (getattr(extra_user, "email", "") or "").strip().lower()
+            if not extra_email or extra_email == primary_email or extra_email in seen_emails:
+                continue
+            seen_emails.add(extra_email)
+            final_cc_users.append(extra_user)
 
         logger.info(
             "KAM CC Debug → final CC resolved. employee_id=%s employee_email=%s mapping_id=%s cc_emails=%s",

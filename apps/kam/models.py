@@ -947,3 +947,109 @@ class SyncIntent(TimeStamped):
 
     class Meta:
         indexes = [models.Index(fields=["status", "created_at"])]
+
+# ---------------------------------------------------------------------------
+# Administrator-managed KAM approval email recipients
+# ---------------------------------------------------------------------------
+class KAMEmailApprovalSettings(TimeStamped):
+    """
+    Singleton configuration for KAM visit approval email recipients.
+
+    Behaviour:
+    - The employee's mapped manager can remain the primary TO recipient.
+    - Additional approval users receive the same actionable email and can use
+      the same signed Approve/Reject links.
+    - CC users receive the same email for visibility.
+    - Administrators can add/remove users from Django Admin without code edits.
+    """
+
+    approval_users = models.ManyToManyField(
+        User,
+        blank=True,
+        related_name="kam_email_approval_configurations",
+        help_text=(
+            "Additional users who receive actionable KAM visit approval emails. "
+            "The mapped manager is included separately when enabled."
+        ),
+    )
+    cc_users = models.ManyToManyField(
+        User,
+        blank=True,
+        related_name="kam_email_cc_configurations",
+        help_text="Users who receive KAM approval emails for visibility.",
+    )
+    include_mapped_manager = models.BooleanField(
+        default=True,
+        help_text="Include the KAM employee's mapped reporting manager as primary recipient.",
+    )
+    is_active = models.BooleanField(
+        default=True,
+        help_text="Disable to use only the existing employee manager/CC mapping logic.",
+    )
+    updated_by = models.ForeignKey(
+        User,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="kam_email_approval_settings_updates",
+    )
+
+    class Meta:
+        verbose_name = "KAM Approval Email Setting"
+        verbose_name_plural = "KAM Approval Email Settings"
+
+    def __str__(self):
+        return "KAM Approval Email Settings"
+
+    @classmethod
+    def get_solo(cls):
+        obj, _created = cls.objects.get_or_create(pk=1)
+        return obj
+
+    def active_approval_users(self):
+        return list(
+            self.approval_users.filter(is_active=True)
+            .exclude(email__isnull=True)
+            .exclude(email="")
+            .order_by("first_name", "last_name", "username", "id")
+        )
+
+    def active_cc_users(self):
+        return list(
+            self.cc_users.filter(is_active=True)
+            .exclude(email__isnull=True)
+            .exclude(email="")
+            .order_by("first_name", "last_name", "username", "id")
+        )
+
+
+# Register the singleton settings page in Django Admin without requiring a
+# separate replacement of the project's existing apps/kam/admin.py file.
+try:
+    from django.contrib import admin
+    from django.contrib.admin.sites import AlreadyRegistered
+
+    class KAMEmailApprovalSettingsAdmin(admin.ModelAdmin):
+        filter_horizontal = ("approval_users", "cc_users")
+        list_display = ("id", "is_active", "include_mapped_manager", "updated_by", "updated_at")
+        readonly_fields = ("updated_at", "created_at")
+
+        def has_add_permission(self, request):
+            return not KAMEmailApprovalSettings.objects.exists()
+
+        def has_delete_permission(self, request, obj=None):
+            return False
+
+        def save_model(self, request, obj, form, change):
+            obj.pk = 1
+            obj.updated_by = request.user
+            super().save_model(request, obj, form, change)
+
+    try:
+        admin.site.register(KAMEmailApprovalSettings, KAMEmailApprovalSettingsAdmin)
+    except AlreadyRegistered:
+        pass
+except Exception:
+    # Admin registration must never prevent the KAM app from loading.
+    pass
+
