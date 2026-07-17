@@ -172,7 +172,7 @@
       <div class="card-header fw-semibold d-flex align-items-center gap-2">
         Per-Employee Approver Mapping
         <span class="badge bg-info text-dark fw-normal" style="font-size:11px;">
-          Hold Ctrl / ⌘ to select multiple
+          Manager = one approver; Finance = one or more users
         </span>
       </div>
       <div class="card-body">
@@ -185,8 +185,8 @@
                   <th style="min-width:160px;">Employee</th>
                   <th style="min-width:80px;">Role</th>
                   <th style="min-width:180px;">
-                    Manager(s)
-                    <div class="text-muted fw-normal" style="font-size:10px;">Ctrl/⌘ = multi-select</div>
+                    Manager
+                    <div class="text-muted fw-normal" style="font-size:10px;">Secure approval link goes to this person</div>
                   </th>
                   <th style="min-width:180px;">
                     Finance User(s)
@@ -212,29 +212,17 @@
 
                   <td>
                     <select
-                      name="managers_{{ user.id }}"
+                      name="manager_{{ user.id }}"
                       class="form-select form-select-sm"
-                      multiple
-                      size="3"
-                      title="Hold Ctrl or ⌘ to select multiple managers"
                     >
+                      <option value="">— No manager —</option>
                       {% for u in all_users_for_select %}
                       <option value="{{ u.id }}"
-                        {% if mapping and u in mapping.managers.all %}selected{% endif %}>
-                        {{ u.get_full_name|default:u.username }}
+                        {% if mapping and mapping.primary_manager and u.id == mapping.primary_manager.id %}selected{% endif %}>
+                        {{ u.get_full_name|default:u.username }}{% if u.email %} — {{ u.email }}{% endif %}
                       </option>
                       {% endfor %}
                     </select>
-
-                    {% if mapping %}
-                      {% with mgr_count=mapping.managers.count %}
-                        <div class="text-muted mt-1 mapping-count {% if not mgr_count %}is-hidden{% endif %}">
-                          {% if mgr_count %}{{ mgr_count }} selected{% endif %}
-                        </div>
-                      {% endwith %}
-                    {% else %}
-                      <div class="text-muted mt-1 mapping-count is-hidden"></div>
-                    {% endif %}
                   </td>
 
                   <td>
@@ -280,7 +268,8 @@
               Save Mappings
             </button>
             <span class="text-muted small">
-              To deselect all for a user, hold Ctrl/⌘ and click selected entries again.
+              Clear both Manager and Finance to delete/reset that employee's mapping.
+              Existing requests keep their already assigned manager; new requests use this page.
             </span>
           </div>
         </form>

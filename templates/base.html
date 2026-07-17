@@ -966,8 +966,8 @@
 
     <div class="rail-footer">
       <div class="rail-avatar" id="railAvatar" title="{{ user.get_full_name|default:user.username }}">
-        {% if user.profile.image %}
-          <img src="{{ user.profile.image.url }}" alt="{{ user.get_full_name|default:user.username }}">
+        {% if user.profile.photo %}
+          <img src="{{ user.profile.photo.url }}" alt="{{ user.get_full_name|default:user.username }}">
         {% elif user.avatar %}
           <img src="{{ user.avatar.url }}" alt="{{ user.get_full_name|default:user.username }}">
         {% else %}
@@ -1336,7 +1336,7 @@
         </a>
         {% endif %}
 
-        {% if user|has_permission:"reimbursement_admin" %}
+        {% if user|has_permission:"reimbursement_admin" or user.is_superuser %}
         <span class="sub-section-label">Admin</span>
 
         <a href="{% url 'reimbursement:admin_requests' %}"
@@ -1361,7 +1361,7 @@
 
         <a href="{% url 'reimbursement:approver_mapping_admin' %}"
            class="sub-link {% if request.resolver_match.url_name == 'approver_mapping_admin' %}active{% endif %}">
-          <i class="fa-solid fa-user-shield"></i> Approver Mapping
+          <i class="fa-solid fa-users-gear"></i> Approver & Finance Setup
         </a>
 
         <a href="{% url 'reimbursement:admin_export_csv' %}" class="sub-link">
@@ -1518,8 +1518,8 @@
         <div class="profile-wrap" id="profileWrap">
           <button type="button" class="profile-btn" id="profileBtn" aria-haspopup="true" aria-expanded="false">
             <span class="profile-avatar">
-              {% if user.profile.image %}
-                <img src="{{ user.profile.image.url }}" alt="{{ user.get_full_name|default:user.username }}">
+              {% if user.profile.photo %}
+                <img src="{{ user.profile.photo.url }}" alt="{{ user.get_full_name|default:user.username }}">
               {% elif user.avatar %}
                 <img src="{{ user.avatar.url }}" alt="{{ user.get_full_name|default:user.username }}">
               {% else %}
@@ -1536,6 +1536,12 @@
               <div class="pd-name">{{ user.get_full_name|default:user.username }}</div>
               <div class="pd-email">{{ user.email }}</div>
             </div>
+
+            {% if user|has_permission:"reimbursement_admin" or user.is_superuser %}
+            <a href="{% url 'reimbursement:approver_mapping_admin' %}" class="pd-item">
+              <i class="fa-solid fa-users-gear"></i> Reimbursement Routing
+            </a>
+            {% endif %}
 
             {% if user.is_superuser %}
             <a href="{% url 'settings:system_settings' %}" class="pd-item">

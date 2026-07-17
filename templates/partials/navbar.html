@@ -2,11 +2,18 @@
 
 <header class="erp-topbar" id="erpTopbar">
   <div class="topbar-left">
-    <button type="button" class="topbar-hamburger" id="mobileToggle" aria-label="Toggle sidebar" aria-expanded="false">
+    <button type="button"
+            class="topbar-hamburger"
+            id="mobileToggle"
+            aria-label="Toggle sidebar"
+            aria-expanded="false">
       <i class="fa-solid fa-bars"></i>
     </button>
+
     <div class="topbar-breadcrumb">
-      <a href="{% url 'dashboard:home' %}"><i class="fa-solid fa-house" style="font-size:11px"></i></a>
+      <a href="{% url 'dashboard:home' %}">
+        <i class="fa-solid fa-house" style="font-size:11px"></i>
+      </a>
       <span class="bc-sep"><i class="fa-solid fa-angle-right"></i></span>
       <span class="bc-current">{% block navbar_title %}Dashboard{% endblock %}</span>
     </div>
@@ -19,7 +26,10 @@
     </div>
 
     {% if user|has_permission:"reimbursement_finance_review" or user.is_superuser %}
-      <a href="{% url 'reimbursement:finance_rejected_bills_queue' %}" class="topbar-icon-btn" title="Notifications">
+      <a href="{% url 'reimbursement:finance_rejected_bills_queue' %}"
+         class="topbar-icon-btn"
+         title="Finance rejected bills"
+         aria-label="Finance rejected bills">
         <i class="fa-regular fa-bell"></i>
       </a>
     {% else %}
@@ -29,29 +39,48 @@
     {% endif %}
 
     <div class="profile-wrap" id="profileWrap">
-      <button type="button" class="profile-btn" id="profileBtn" aria-haspopup="true" aria-expanded="false">
+      <button type="button"
+              class="profile-btn"
+              id="profileBtn"
+              aria-haspopup="true"
+              aria-expanded="false">
         <span class="profile-avatar">
-          {% if user.profile.image %}<img src="{{ user.profile.image.url }}" alt="">
-          {% elif user.avatar %}<img src="{{ user.avatar.url }}" alt="">
-          {% else %}<i class="fa-solid fa-user"></i>{% endif %}
+          {% if user.profile.photo %}
+            <img src="{{ user.profile.photo.url }}" alt="{{ user.get_full_name|default:user.username }}">
+          {% elif user.avatar %}
+            <img src="{{ user.avatar.url }}" alt="{{ user.get_full_name|default:user.username }}">
+          {% else %}
+            <i class="fa-solid fa-user"></i>
+          {% endif %}
         </span>
         <span class="profile-name d-none d-md-block">{{ user.get_full_name|default:user.username }}</span>
         <i class="fa-solid fa-angle-down profile-caret"></i>
       </button>
+
       <div class="profile-dropdown" id="profileDropdown">
         <div class="pd-head">
           <div class="pd-name">{{ user.get_full_name|default:user.username }}</div>
           <div class="pd-email">{{ user.email }}</div>
         </div>
+
+        {% if user|has_permission:"reimbursement_admin" or user.is_superuser %}
+        <a href="{% url 'reimbursement:approver_mapping_admin' %}" class="pd-item">
+          <i class="fa-solid fa-users-gear"></i> Reimbursement Routing
+        </a>
+        {% endif %}
+
         {% if user.is_superuser %}
         <a href="{% url 'settings:system_settings' %}" class="pd-item">
           <i class="fa-solid fa-sliders"></i> System Settings
         </a>
         {% endif %}
+
         <a href="{% url 'users:debug_permissions' %}" class="pd-item">
           <i class="fa-solid fa-shield-halved"></i> Permissions
         </a>
+
         <div class="pd-divider"></div>
+
         <form method="post" action="{% url 'logout' %}" style="margin:0">
           {% csrf_token %}
           <button type="submit" class="pd-item danger">

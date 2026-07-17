@@ -265,17 +265,35 @@ class ReimbursementApproverMapping(models.Model):
         return f"Reimbursement mapping for {self.employee}"
 
     def primary_manager(self):
-        return self.managers.first()
+        """Return the single workflow approver chosen by Admin.
+
+        The admin UI stores one manager in the M2M field for backward-compatible
+        schema support. Active users with an email address are preferred.
+        """
+        return (
+            self.managers.filter(is_active=True)
+            .exclude(email="")
+            .order_by("id")
+            .first()
+            or self.managers.order_by("id").first()
+        )
 
     def primary_finance(self):
-        return self.finance_users.first()
+        """Return the first active Finance user for compatibility callers."""
+        return (
+            self.finance_users.filter(is_active=True)
+            .exclude(email="")
+            .order_by("id")
+            .first()
+            or self.finance_users.order_by("id").first()
+        )
 
     def all_manager_emails(self) -> list[str]:
         return [
             e
             for e in (
                 (getattr(u, "email", "") or "").strip()
-                for u in self.managers.all()
+                for u in self.managers.filter(is_active=True).order_by("id")
             )
             if e
         ]
@@ -285,7 +303,7 @@ class ReimbursementApproverMapping(models.Model):
             e
             for e in (
                 (getattr(u, "email", "") or "").strip()
-                for u in self.finance_users.all()
+                for u in self.finance_users.filter(is_active=True).order_by("id")
             )
             if e
         ]

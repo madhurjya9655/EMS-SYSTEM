@@ -2073,7 +2073,9 @@ class ApproverMappingAdminView(
     template_name = "reimbursement/admin_approver_mapping.html"
 
     def _all_users_for_select(self):
-        return User.objects.all().order_by("first_name", "last_name", "username")
+        return User.objects.filter(is_active=True).order_by(
+            "first_name", "last_name", "username"
+        )
 
     def _rows(self):
         rows = []
@@ -2162,7 +2164,7 @@ class ApproverMappingAdminView(
                 changed = False
 
                 if apply_manager:
-                    mapping.managers.set(managers_for_all or [])
+                    mapping.managers.set([managers_for_all] if managers_for_all else [])
                     changed = True
 
                 if apply_finance:
@@ -2183,54 +2185,64 @@ class ApproverMappingAdminView(
         users = self._all_users_for_select()
         id_to_user = {u.id: u for u in users}
         processed = 0
+        deleted = 0
 
         with transaction.atomic():
-            for u in users:
-                manager_ids = [
-                    int(x)
-                    for x in request.POST.getlist(f"managers_{u.id}")
-                    if str(x).isdigit() and int(x) in id_to_user
-                ]
-
+            for employee in users:
+                manager_id_raw = (request.POST.get(f"manager_{employee.id}") or "").strip()
                 finance_user_ids = [
-                    int(x)
-                    for x in request.POST.getlist(f"finance_users_{u.id}")
-                    if str(x).isdigit() and int(x) in id_to_user
+                    int(value)
+                    for value in request.POST.getlist(f"finance_users_{employee.id}")
+                    if str(value).isdigit() and int(value) in id_to_user
                 ]
 
-                mapping, _ = ReimbursementApproverMapping.objects.get_or_create(
-                    employee=u
-                )
+                manager = None
+                if manager_id_raw.isdigit():
+                    manager = id_to_user.get(int(manager_id_raw))
+
+                mapping = ReimbursementApproverMapping.objects.filter(
+                    employee=employee
+                ).first()
+
+                # Empty manager + empty Finance selection means delete/reset this mapping.
+                # Existing reimbursement requests retain their stored req.manager snapshot.
+                if manager is None and not finance_user_ids:
+                    if mapping:
+                        mapping.delete()
+                        deleted += 1
+                    continue
+
+                if mapping is None:
+                    mapping = ReimbursementApproverMapping.objects.create(
+                        employee=employee
+                    )
 
                 current_manager_ids = set(
                     mapping.managers.values_list("id", flat=True)
                 )
-
                 current_finance_ids = set(
                     mapping.finance_users.values_list("id", flat=True)
                 )
-
-                new_manager_ids = set(manager_ids)
+                new_manager_ids = {manager.id} if manager else set()
                 new_finance_ids = set(finance_user_ids)
 
                 if (
                     current_manager_ids != new_manager_ids
                     or current_finance_ids != new_finance_ids
                 ):
-                    mapping.managers.set(
-                        [id_to_user[mid] for mid in manager_ids]
-                    )
-
+                    mapping.managers.set([manager] if manager else [])
                     mapping.finance_users.set(
-                        [id_to_user[fid] for fid in finance_user_ids]
+                        [id_to_user[user_id] for user_id in finance_user_ids]
                     )
-
                     processed += 1
 
-        messages.success(
-            request,
-            f"Per-employee mappings saved. Rows processed: {processed}.",
-        )
+        if processed or deleted:
+            messages.success(
+                request,
+                f"Mappings saved. Updated: {processed}; deleted/reset: {deleted}.",
+            )
+        else:
+            messages.info(request, "No mapping changes detected.")
 
         return redirect(request.path)
 

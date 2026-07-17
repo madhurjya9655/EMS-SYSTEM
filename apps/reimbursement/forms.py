@@ -749,15 +749,15 @@ class ApproverMappingBulkForm(forms.Form):
         widget=forms.CheckboxInput(attrs={"class": "form-check-input"}),
     )
 
-    managers_for_all = forms.ModelMultipleChoiceField(
+    managers_for_all = forms.ModelChoiceField(
         queryset=User.objects.filter(is_active=True).order_by(
             "first_name",
             "last_name",
             "username",
         ),
         required=False,
-        label="Managers for all employees",
-        widget=forms.SelectMultiple(attrs={"class": "form-select"}),
+        label="Manager for all employees",
+        widget=forms.Select(attrs={"class": "form-select"}),
     )
 
     apply_finance_to_all = forms.BooleanField(
@@ -859,7 +859,7 @@ class ApproverMappingBulkForm(forms.Form):
 
                 if apply_manager:
                     mapping.managers.set(
-                        managers_for_all or []
+                        [managers_for_all] if managers_for_all else []
                     )
                     changed = True
 

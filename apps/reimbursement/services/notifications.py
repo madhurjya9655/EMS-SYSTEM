@@ -52,8 +52,11 @@ def _as_cfg_list(value) -> List[str]:
     return [part.strip() for part in str(value).split(",") if part.strip()]
 
 
-# Finance verification stage — ONLY these (settings first; fallback to spec)
-_FINANCE_TEAM = _as_cfg_list(getattr(settings, "REIMBURSEMENT_FINANCE_TEAM", None)) or [
+# Current production Finance recipients are retained only as a final fallback.
+# Admin mappings and ReimbursementSettings.finance_emails take precedence.
+_CURRENT_FINANCE_DEFAULTS = _as_cfg_list(
+    getattr(settings, "REIMBURSEMENT_FINANCE_TEAM", None)
+) or [
     "akshay@blueoceansteels.com",
     "sharyu@blueoceansteels.com",
 ]
@@ -492,22 +495,27 @@ def _recipients_for_management(req: ReimbursementRequest) -> _Recipients:
     return _Recipients(to=[], cc=[])
 
 def _recipients_for_finance(req: ReimbursementRequest) -> _Recipients:
-    # NEW POLICY: Do not include admins here.
+    """Resolve Finance recipients in Admin-controlled priority order.
+
+    1. Per-employee ReimbursementApproverMapping.finance_users
+    2. Global ReimbursementSettings.finance_emails
+    3. Existing production Finance defaults (backward-compatible safety net)
+    """
     finance_list: List[str] = []
     try:
         mapping = ReimbursementApproverMapping.for_employee(req.created_by)
-        if mapping and mapping.finance and mapping.finance.email:
-            finance_list.append((mapping.finance.email or "").strip())
+        if mapping:
+            finance_list.extend(mapping.all_finance_emails())
+
         finance_list.extend(_finance_emails())
+
+        if not _dedupe_preserve(finance_list):
+            finance_list.extend(_CURRENT_FINANCE_DEFAULTS)
     except Exception:
         logger.exception("Failed resolving finance recipients for reimbursement #%s", req.id)
+        finance_list.extend(_CURRENT_FINANCE_DEFAULTS)
 
     return _Recipients(to=_dedupe_preserve(finance_list), cc=[])
-
-
-def _recipients_for_finance_enforced() -> _Recipients:
-    # Verified “concerned” recipients only
-    return _Recipients(to=_dedupe_preserve(_FINANCE_TEAM), cc=[])
 
 
 def _employee_email(req: ReimbursementRequest) -> Optional[str]:
@@ -745,7 +753,7 @@ def _management_action_buttons(req: ReimbursementRequest) -> str:
 
 def send_reimbursement_finance_verify(req: ReimbursementRequest, *, employee_note: str = "") -> None:
     """
-    STEP 1 — Send ONLY to Finance team (Akshay & Sharyu). No CC.
+    STEP 1 — Send to the Admin-configured Finance user(s). No CC.
 
     Finance verification email intentionally shows all included bills, because
     Finance must decide which bills are approved/rejected.
@@ -759,7 +767,7 @@ def send_reimbursement_finance_verify(req: ReimbursementRequest, *, employee_not
         logger.info("Suppressing duplicate '%s' email for req #%s.", kind, req.id)
         return
 
-    fin_rec = _recipients_for_finance_enforced()
+    fin_rec = _recipients_for_finance(req)
     if not fin_rec.to:
         logger.warning("Finance verify email suppressed: no finance address for req #%s.", req.id)
         return
@@ -1797,7 +1805,7 @@ def send_bill_rejected_by_finance(req: ReimbursementRequest, line: Reimbursement
 
 def send_bill_resubmitted(req: ReimbursementRequest, line: ReimbursementLine, *, actor=None) -> None:
     """
-    Employee edits/replaces a previously rejected bill — email the Finance team (Akshay & Sharyu).
+    Employee edits/replaces a previously rejected bill — email the Admin-configured Finance user(s).
     """
     if not _email_enabled():
         logger.info("Emails disabled; skipping bill-resubmitted email for req #%s line #%s.", req.id, line.id)
@@ -1808,7 +1816,7 @@ def send_bill_resubmitted(req: ReimbursementRequest, line: ReimbursementLine, *,
         logger.info("Suppressing duplicate '%s' email for req #%s line #%s.", kind, req.id, line.id)
         return
 
-    fin_rec = _recipients_for_finance_enforced()
+    fin_rec = _recipients_for_finance(req)
     if not fin_rec.to:
         logger.warning("Bill resubmitted email suppressed: no finance recipients for req #%s.", req.id)
         return

@@ -32,8 +32,8 @@
         {% if user|has_permission:"reimbursement_finance_review" or user.is_superuser %}
             <a href="{% url 'reimbursement:finance_rejected_bills_queue' %}"
                class="navbar-icon-btn"
-               title="Notifications"
-               aria-label="Notifications">
+               title="Finance rejected bills"
+               aria-label="Finance rejected bills">
                 <i class="fa-regular fa-bell"></i>
             </a>
         {% else %}
@@ -49,8 +49,8 @@
                     aria-haspopup="true"
                     aria-expanded="false">
                 <span class="profile-avatar">
-                    {% if user.profile.image %}
-                        <img src="{{ user.profile.image.url }}" alt="{{ user.get_full_name|default:user.username }}">
+                    {% if user.profile.photo %}
+                        <img src="{{ user.profile.photo.url }}" alt="{{ user.get_full_name|default:user.username }}">
                     {% elif user.avatar %}
                         <img src="{{ user.avatar.url }}" alt="{{ user.get_full_name|default:user.username }}">
                     {% else %}
@@ -69,6 +69,13 @@
                     <div class="profile-dropdown-name">{{ user.get_full_name|default:user.username }}</div>
                     <div class="profile-dropdown-email-full">{{ user.email }}</div>
                 </div>
+
+                {% if user|has_permission:"reimbursement_admin" or user.is_superuser %}
+                <a href="{% url 'reimbursement:approver_mapping_admin' %}" class="profile-dropdown-item">
+                    <i class="fa-solid fa-users-gear"></i>
+                    <span>Reimbursement Routing</span>
+                </a>
+                {% endif %}
 
                 {% if user.is_superuser %}
                 <a href="{% url 'settings:system_settings' %}" class="profile-dropdown-item">

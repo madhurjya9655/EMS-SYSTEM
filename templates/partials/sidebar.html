@@ -232,13 +232,13 @@
       <a href="{% url 'reimbursement:finance_settlement' %}" class="sub-link {% if request.resolver_match.url_name == 'finance_settlement' %}active{% endif %}"><i class="fa-solid fa-hand-holding-dollar"></i> Settlement</a>
       <a href="{% url 'reimbursement:finance_rejected_bills_queue' %}" class="sub-link {% if request.resolver_match.url_name == 'finance_rejected_bills_queue' %}active{% endif %}"><i class="fa-solid fa-rotate-left"></i> Rejected Bills</a>
       {% endif %}
-      {% if user|has_permission:"reimbursement_admin" %}
+      {% if user|has_permission:"reimbursement_admin" or user.is_superuser %}
       <span class="sub-section-label">Admin</span>
       <a href="{% url 'reimbursement:admin_requests' %}" class="sub-link {% if request.resolver_match.url_name == 'admin_requests' %}active{% endif %}"><i class="fa-solid fa-list-alt"></i> All Requests</a>
       <a href="{% url 'reimbursement:admin_bills_summary' %}" class="sub-link {% if request.resolver_match.url_name == 'admin_bills_summary' %}active{% endif %}"><i class="fa-solid fa-table"></i> Bills Summary</a>
       <a href="{% url 'reimbursement:admin_status_summary' %}" class="sub-link {% if request.resolver_match.url_name == 'admin_status_summary' %}active{% endif %}"><i class="fa-solid fa-signal"></i> Status Summary</a>
       <a href="{% url 'reimbursement:admin_employee_summary' %}" class="sub-link {% if request.resolver_match.url_name == 'admin_employee_summary' %}active{% endif %}"><i class="fa-solid fa-user-tie"></i> Employee Summary</a>
-      <a href="{% url 'reimbursement:approver_mapping_admin' %}" class="sub-link {% if request.resolver_match.url_name == 'approver_mapping_admin' %}active{% endif %}"><i class="fa-solid fa-user-shield"></i> Approver Mapping</a>
+      <a href="{% url 'reimbursement:approver_mapping_admin' %}" class="sub-link {% if request.resolver_match.url_name == 'approver_mapping_admin' %}active{% endif %}"><i class="fa-solid fa-users-gear"></i> Approver & Finance Setup</a>
       <a href="{% url 'reimbursement:admin_export_csv' %}" class="sub-link"><i class="fa-solid fa-file-csv"></i> Export CSV</a>
       {% endif %}
       {% if user|has_permission:"reimbursement_analytics" or user.is_superuser %}
