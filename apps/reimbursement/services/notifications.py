@@ -195,15 +195,19 @@ def _collect_receipt_files(
         else:
             lines = req.lines.select_related("expense_item")
 
-        seen_paths = set()
+        seen_names = set()
         for line in lines:
-            f = line.receipt_file or getattr(line.expense_item, "receipt_file", None)
+            # ExpenseItem is the employee-editable, current receipt source.
+            # ReimbursementLine remains a fallback for legacy/snapshot records.
+            f = getattr(line.expense_item, "receipt_file", None) or line.receipt_file
             if not f:
                 continue
-            path = getattr(f, "path", None)
-            if not path or path in seen_paths:
+
+            name = getattr(f, "name", None)
+            if not name or name in seen_names:
                 continue
-            seen_paths.add(path)
+
+            seen_names.add(name)
             files.append(f)
     except Exception:
         logger.exception("Failed to collect receipt files for reimbursement #%s", req.id)
@@ -753,7 +757,8 @@ def _management_action_buttons(req: ReimbursementRequest) -> str:
 
 def send_reimbursement_finance_verify(req: ReimbursementRequest, *, employee_note: str = "") -> None:
     """
-    STEP 1 — Send to the Admin-configured Finance user(s). No CC.
+    STEP 1 — Send to the Admin-configured Finance user(s).
+    CC Amreen for visibility on every Finance verification email.
 
     Finance verification email intentionally shows all included bills, because
     Finance must decide which bills are approved/rejected.
@@ -848,7 +853,7 @@ def send_reimbursement_finance_verify(req: ReimbursementRequest, *, employee_not
         kind=kind,
         subject=subject,
         to_addrs=fin_rec.to,
-        cc=[],  # no admins
+        cc=_approval_cc_list(),  # Amreen visibility CC for all finance verification emails
         reply_to=reply_to,
         html=html,
         txt=txt,
@@ -1879,7 +1884,7 @@ def send_bill_resubmitted(req: ReimbursementRequest, line: ReimbursementLine, *,
         kind=kind,
         subject=subject,
         to_addrs=fin_rec.to,
-        cc=[],  # enforced: only finance team
+        cc=_approval_cc_list(),  # Amreen visibility CC for all finance resubmission emails
         reply_to=[emp_email] if emp_email and emp_email != "-" else _amreen_reply_to(),
         html=html,
         txt=txt,

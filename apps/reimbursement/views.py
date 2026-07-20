@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 import csv
 import logging
+from uuid import uuid4
 from typing import Any, Dict, Iterable, Optional, Sequence, Set
 
 from django.contrib import messages
@@ -332,9 +333,40 @@ class ExpenseItemUpdateView(LoginRequiredMixin, PermissionRequiredMixin, UpdateV
         )
         return ctx
 
+    @transaction.atomic
     def form_valid(self, form: ExpenseItemForm):
+        uploaded_receipt = self.request.FILES.get("receipt_file")
+
+        if uploaded_receipt:
+            # Always generate a fresh storage key for a replacement receipt.
+            # Reusing the old URL can make browsers, CDNs, and email clients show
+            # cached content even after the underlying object was overwritten.
+            original_name = os.path.basename(uploaded_receipt.name or "receipt")
+            stem, ext = os.path.splitext(original_name)
+            safe_stem = "".join(
+                ch if ch.isalnum() or ch in {"-", "_"} else "_"
+                for ch in stem
+            ).strip("_") or "receipt"
+            uploaded_receipt.name = f"{safe_stem}_{uuid4().hex}{ext.lower()}"
+
+        response = super().form_valid(form)
+
+        if uploaded_receipt and self.object.receipt_file:
+            # Existing rejected/resubmitted lines are reused by the workflow.
+            # Keep their receipt snapshot synchronized with the corrected expense.
+            ReimbursementLine.objects.filter(
+                expense_item=self.object,
+                status=ReimbursementLine.Status.INCLUDED,
+                bill_status__in=[
+                    ReimbursementLine.BillStatus.FINANCE_REJECTED,
+                    ReimbursementLine.BillStatus.EMPLOYEE_RESUBMITTED,
+                ],
+            ).update(
+                receipt_file=self.object.receipt_file.name,
+                updated_at=timezone.now(),
+            )
+
         messages.success(self.request, "Expense saved.")
-        super().form_valid(form)
         return redirect("reimbursement:expense_edit", pk=self.object.pk)
 
 
@@ -2348,7 +2380,9 @@ def download_receipt(
             pk=line_id,
         )
 
-        file_field = line.receipt_file or line.expense_item.receipt_file
+        # ExpenseItem is the current employee-editable receipt. The line field
+        # is retained as a fallback for legacy records without an expense receipt.
+        file_field = line.expense_item.receipt_file or line.receipt_file
         owner = line.request.created_by
 
     elif expense_id is not None:
