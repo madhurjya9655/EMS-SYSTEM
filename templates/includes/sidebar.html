@@ -62,6 +62,14 @@
                 </a>
                 {% endif %}
 
+                {% if user.is_superuser %}
+                <a href="{% url 'leave:leave_email_settings' %}"
+                   class="sidebar-link {% if request.resolver_match.url_name == 'leave_email_settings' %}active{% endif %}">
+                    <i class="fa-solid fa-envelope-circle-check"></i>
+                    <span>Leave Email Settings</span>
+                </a>
+                {% endif %}
+
                 {% endif %}
             </div>
             {% endif %}

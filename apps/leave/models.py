@@ -268,6 +268,80 @@ class CCConfiguration(models.Model):
         return self.display_name or self.user.get_full_name() or self.user.username
 
 
+class LeaveEmailSettings(models.Model):
+    """Singleton, admin-managed global TO and CC configuration for Leave emails.
+
+    The existing workflow recipient is always preserved. Users selected in
+    ``to_users`` are added as additional TO recipients, while ``cc_users`` are
+    added as CC recipients. This allows multiple administrators/HR users to be
+    included without replacing the employee, manager, assignee, or other
+    workflow-specific recipient.
+    """
+
+    to_users = models.ManyToManyField(
+        settings.AUTH_USER_MODEL,
+        blank=True,
+        related_name="global_leave_email_to_settings",
+        help_text="Active users added to TO on every Leave notification email.",
+    )
+
+    cc_users = models.ManyToManyField(
+        settings.AUTH_USER_MODEL,
+        blank=True,
+        related_name="global_leave_email_cc_settings",
+        help_text="Active users added to CC on every Leave notification email.",
+    )
+
+    is_active = models.BooleanField(
+        default=True,
+        help_text="Apply this global Leave email recipient configuration.",
+    )
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Leave Email Settings"
+        verbose_name_plural = "Leave Email Settings"
+
+    def __str__(self) -> str:
+        return "Leave Email Settings"
+
+    @classmethod
+    def get_solo(cls) -> "LeaveEmailSettings":
+        obj, _created = cls.objects.get_or_create(pk=1)
+        return obj
+
+    def save(self, *args, **kwargs) -> None:
+        self.pk = 1
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        return None
+
+    def global_to_emails(self) -> List[str]:
+        if not self.is_active:
+            return []
+        return _dedupe_emails_preserve_order(
+            list(
+                self.to_users.filter(is_active=True)
+                .exclude(email__isnull=True)
+                .exclude(email__exact="")
+                .values_list("email", flat=True)
+            )
+        )
+
+    def global_cc_emails(self) -> List[str]:
+        if not self.is_active:
+            return []
+        return _dedupe_emails_preserve_order(
+            list(
+                self.cc_users.filter(is_active=True)
+                .exclude(email__isnull=True)
+                .exclude(email__exact="")
+                .values_list("email", flat=True)
+            )
+        )
+
+
 # =============================================================================
 # LEAVE TYPE / STATUS
 # =============================================================================

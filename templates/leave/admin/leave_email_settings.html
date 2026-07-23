@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}Leave Email Recipients | BOS Lakshya{% endblock %}
+{% block navbar_title %}Leave Email Recipients{% endblock %}
+{% block breadcrumb %}Leave / Email Recipients{% endblock %}
+{% block page_title %}Leave Email Recipients{% endblock %}
+
+{% block head_extra %}
+<style>
+  .recipient-page { max-width: 1050px; margin: 0 auto; }
+  .recipient-card { background:#fff; border:1px solid var(--border); border-radius:16px; box-shadow:var(--shadow-sm); overflow:hidden; }
+  .recipient-head { padding:20px 22px; border-bottom:1px solid var(--border-light); }
+  .recipient-head h2 { margin:0; font-size:18px; font-weight:800; }
+  .recipient-head p { margin:5px 0 0; color:var(--muted); }
+  .recipient-body { padding:22px; }
+  .recipient-grid { display:grid; grid-template-columns:1fr 1fr; gap:20px; }
+  .recipient-section { border:1px solid var(--border); border-radius:14px; padding:16px; background:var(--surface-alt); }
+  .recipient-section h3 { margin:0; font-size:15px; font-weight:800; }
+  .recipient-section p { margin:5px 0 12px; color:var(--muted); font-size:13px; }
+  .recipient-list { height:360px; overflow-y:auto; border:1px solid var(--border); border-radius:11px; background:#fff; padding:7px; }
+  .recipient-list label { display:flex; align-items:center; gap:10px; padding:9px 10px; border-radius:8px; cursor:pointer; margin:0; }
+  .recipient-list label:hover { background:var(--primary-soft); }
+  .recipient-list input { width:18px; height:18px; accent-color:var(--primary); }
+  .selected-count { display:inline-flex; margin-left:7px; padding:2px 8px; border-radius:999px; background:var(--primary-soft); color:var(--primary-dark); font-size:12px; }
+  .recipient-actions { display:flex; justify-content:space-between; align-items:center; gap:12px; padding:17px 22px; border-top:1px solid var(--border-light); background:var(--surface-alt); }
+  .active-note { color:var(--muted); font-size:13px; }
+  .active-note i { color:var(--success); }
+  .errorlist { margin:8px 0 0; color:var(--danger); font-size:12.5px; }
+  @media (max-width:800px) { .recipient-grid { grid-template-columns:1fr; } .recipient-list { height:280px; } }
+  @media (max-width:576px) { .recipient-body { padding:14px; } .recipient-actions { flex-direction:column; align-items:stretch; } }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="recipient-page">
+  <form method="post" novalidate>
+    {% csrf_token %}
+    <div class="recipient-card">
+      <div class="recipient-head">
+        <h2><i class="fa-solid fa-envelope-circle-check me-2"></i>Leave Email Recipients</h2>
+        <p>Select multiple TO and CC users. Saved changes apply immediately to the next Leave email.</p>
+      </div>
+
+      <div class="recipient-body">
+        {% if form.non_field_errors %}<div class="alert alert-danger">{{ form.non_field_errors }}</div>{% endif %}
+
+        <div class="recipient-grid">
+          <section class="recipient-section">
+            <h3>TO Recipients <span class="selected-count" id="toCount">0 selected</span></h3>
+            <p>These users are added to TO. The workflow recipient remains included.</p>
+            <div class="recipient-list" id="toList">{{ form.to_users }}</div>
+            {% if form.to_users.errors %}{{ form.to_users.errors }}{% endif %}
+          </section>
+
+          <section class="recipient-section">
+            <h3>CC Recipients <span class="selected-count" id="ccCount">0 selected</span></h3>
+            <p>These users receive a copy of every Leave-related email.</p>
+            <div class="recipient-list" id="ccList">{{ form.cc_users }}</div>
+            {% if form.cc_users.errors %}{{ form.cc_users.errors }}{% endif %}
+          </section>
+        </div>
+      </div>
+
+      <div class="recipient-actions">
+        <div class="active-note"><i class="fa-solid fa-circle-check"></i> Changes become active immediately after saving.</div>
+        <button type="submit" class="btn btn-primary"><i class="fa-solid fa-floppy-disk"></i> Save Changes</button>
+      </div>
+    </div>
+  </form>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+(function () {
+  function bind(listId, countId) {
+    var list = document.getElementById(listId), count = document.getElementById(countId);
+    if (!list || !count) return;
+    function update() {
+      var n = list.querySelectorAll('input[type="checkbox"]:checked').length;
+      count.textContent = n + ' selected';
+    }
+    list.addEventListener('change', update);
+    update();
+  }
+  bind('toList', 'toCount');
+  bind('ccList', 'ccCount');
+})();
+</script>
+{% endblock %}

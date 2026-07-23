@@ -27,11 +27,12 @@ from django.views.decorators.http import require_GET, require_POST
 
 from apps.users.permissions import has_permission
 from apps.users.routing import recipients_for_leave
-from .forms import LeaveRequestForm
+from .forms import LeaveEmailSettingsForm, LeaveRequestForm
 from .models import (
     ApproverMapping,
     CCConfiguration,
     HandoverTaskType,
+    LeaveEmailSettings,
     LeaveHandover,
     LeaveRequest,
     LeaveStatus,
@@ -2238,3 +2239,45 @@ def my_handovers_widget(request: HttpRequest) -> HttpResponse:
         + "</tbody></table></div></div></div>"
     )
     return HttpResponse(html)
+
+@login_required
+def leave_email_settings(request: HttpRequest) -> HttpResponse:
+    """
+    Allow superusers to manage global Leave TO and CC recipients.
+
+    Saving keeps the recipient rule active immediately. No server restart is
+    required because the notification service reads these database settings
+    whenever a Leave email is sent.
+    """
+    if not getattr(request.user, "is_superuser", False):
+        raise PermissionDenied("Only superusers can update Leave email settings.")
+
+    settings_obj = LeaveEmailSettings.get_solo()
+
+    if request.method == "POST":
+        form = LeaveEmailSettingsForm(request.POST, instance=settings_obj)
+
+        if form.is_valid():
+            with transaction.atomic():
+                settings_obj = form.save(commit=False)
+                settings_obj.is_active = True
+                settings_obj.save()
+                form.save_m2m()
+
+            messages.success(
+                request,
+                "Leave TO and CC recipients updated successfully. Changes are active immediately.",
+            )
+            return redirect("leave:leave_email_settings")
+    else:
+        form = LeaveEmailSettingsForm(instance=settings_obj)
+
+    return render(
+        request,
+        "leave/admin/leave_email_settings.html",
+        {
+            "form": form,
+            "email_settings": settings_obj,
+            "settings_obj": settings_obj,
+        },
+    )

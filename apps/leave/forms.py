@@ -21,7 +21,7 @@ from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.utils import timezone
 
-from .models import LeaveRequest, LeaveType  # noqa
+from .models import LeaveEmailSettings, LeaveRequest, LeaveType  # noqa
 
 IST = ZoneInfo("Asia/Kolkata")
 
@@ -494,3 +494,58 @@ class AdminLeaveEditForm(forms.ModelForm):
         if commit:
             inst.save()
         return inst
+
+class LeaveEmailSettingsForm(forms.ModelForm):
+    """Simple global Leave TO and CC recipient settings form."""
+
+    class Meta:
+        model = LeaveEmailSettings
+        fields = ("to_users", "cc_users")
+        widgets = {
+            "to_users": forms.CheckboxSelectMultiple(),
+            "cc_users": forms.CheckboxSelectMultiple(),
+        }
+        labels = {
+            "to_users": "TO Recipients",
+            "cc_users": "CC Recipients",
+        }
+        help_texts = {
+            "to_users": (
+                "Selected users are added to TO for every Leave email. "
+                "The original workflow recipient remains included."
+            ),
+            "cc_users": "Selected users are added to CC for every Leave email.",
+        }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        User = get_user_model()
+        eligible_users = (
+            User.objects.filter(is_active=True)
+            .exclude(email__isnull=True)
+            .exclude(email__exact="")
+            .order_by("first_name", "last_name", "username", "id")
+        )
+
+        self.fields["to_users"].queryset = eligible_users
+        self.fields["cc_users"].queryset = eligible_users
+
+    def clean(self):
+        cleaned = super().clean()
+        to_users = cleaned.get("to_users")
+        cc_users = cleaned.get("cc_users")
+
+        if to_users is not None and cc_users is not None:
+            overlap = to_users.filter(pk__in=cc_users.values_list("pk", flat=True))
+            if overlap.exists():
+                names = ", ".join(
+                    user.get_full_name() or user.username or user.email
+                    for user in overlap
+                )
+                self.add_error(
+                    "cc_users",
+                    f"The same user cannot be selected in both TO and CC: {names}.",
+                )
+
+        return cleaned

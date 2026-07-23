@@ -26,6 +26,7 @@ from .models import (
     CCConfiguration,
     LeaveHandover,
     DelegationReminder,
+    LeaveEmailSettings,
 )
 
 User = get_user_model()
@@ -133,6 +134,42 @@ class CCConfigurationAdmin(admin.ModelAdmin):
 
     def get_queryset(self, request):
         return super().get_queryset(request).select_related("user")
+
+
+# ---------------------------------------------------------------------
+# Global Leave Email Settings Admin
+# ---------------------------------------------------------------------
+@admin.register(LeaveEmailSettings)
+class LeaveEmailSettingsAdmin(admin.ModelAdmin):
+    filter_horizontal = ("to_users", "cc_users")
+    fields = (
+        "is_active",
+        "to_users",
+        "cc_users",
+        "updated_at",
+    )
+    readonly_fields = ("updated_at",)
+
+    def has_add_permission(self, request: HttpRequest) -> bool:
+        return bool(request.user.is_superuser and not LeaveEmailSettings.objects.exists())
+
+    def has_view_permission(self, request: HttpRequest, obj=None) -> bool:
+        return bool(getattr(request.user, "is_staff", False))
+
+    def has_change_permission(self, request: HttpRequest, obj=None) -> bool:
+        return bool(getattr(request.user, "is_superuser", False))
+
+    def has_delete_permission(self, request: HttpRequest, obj=None) -> bool:
+        return False
+
+    def changelist_view(self, request: HttpRequest, extra_context=None):
+        settings_obj = LeaveEmailSettings.get_solo()
+        return self.change_view(
+            request,
+            str(settings_obj.pk),
+            form_url="",
+            extra_context=extra_context,
+        )
 
 
 # ---------------------------------------------------------------------

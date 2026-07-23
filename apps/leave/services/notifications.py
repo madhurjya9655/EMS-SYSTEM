@@ -22,6 +22,7 @@ from apps.leave.models import (
     DecisionAction,
     LeaveHandover,
     ApproverMapping,
+    LeaveEmailSettings,
 )
 
 logger = logging.getLogger(__name__)
@@ -109,6 +110,59 @@ def _render_pair(html_tpl: str, txt_tpl: str, context: Dict) -> Tuple[str, str]:
         return html, txt
 
 
+def resolve_leave_recipients(
+    primary_to: str,
+    existing_cc: Optional[Iterable[str]] = None,
+    reply_to_emails: Optional[Iterable[str]] = None,
+) -> Tuple[List[str], List[str]]:
+    """Return final TO and CC lists for a Leave email.
+
+    The workflow-specific primary TO address is always preserved. Configured
+    ``to_users`` are added as additional TO recipients and configured
+    ``cc_users`` are added as CC recipients. Duplicate addresses are removed
+    case-insensitively. Any address already in TO or Reply-To is removed from CC.
+    """
+    global_to: List[str] = []
+    global_cc: List[str] = []
+
+    try:
+        config = LeaveEmailSettings.get_solo()
+        if config.is_active:
+            global_to = list(
+                config.to_users.filter(is_active=True)
+                .exclude(email__isnull=True)
+                .exclude(email__exact="")
+                .values_list("email", flat=True)
+            )
+            global_cc = list(
+                config.cc_users.filter(is_active=True)
+                .exclude(email__isnull=True)
+                .exclude(email__exact="")
+                .values_list("email", flat=True)
+            )
+    except Exception:
+        logger.exception(
+            "Could not load LeaveEmailSettings; preserving workflow recipients."
+        )
+
+    final_to = _dedupe_lower([primary_to, *global_to])
+    blocked_from_cc = {
+        (email or "").strip().lower()
+        for email in [*final_to, *(reply_to_emails or [])]
+        if (email or "").strip()
+    }
+
+    final_cc: List[str] = []
+    seen = set()
+    for email in [*(existing_cc or []), *global_cc]:
+        normalized = (email or "").strip().lower()
+        if not normalized or normalized in seen or normalized in blocked_from_cc:
+            continue
+        seen.add(normalized)
+        final_cc.append(normalized)
+
+    return final_to, final_cc
+
 def _send(
     subject: str,
     to_addr: str,
@@ -124,6 +178,12 @@ def _send(
             cc,
         )
         return False
+
+    to_list, cc = resolve_leave_recipients(
+        primary_to=to_addr,
+        existing_cc=cc,
+        reply_to_emails=reply_to,
+    )
 
     from_email = (
         getattr(settings, "LEAVE_EMAIL_FROM", None)
@@ -169,7 +229,7 @@ def _send(
                 subject=subject,
                 body=txt,
                 from_email=from_email,
-                to=[to_addr],
+                to=to_list,
                 cc=cc or None,
                 reply_to=reply_to or None,
                 connection=conn,
@@ -1231,6 +1291,8 @@ def send_handover_completion_email(handover: LeaveHandover) -> None:
 
 
 __all__ = [
+    "resolve_leave_recipients",
+    "resolve_leave_cc_emails",
     "send_leave_request_email",
     "send_leave_applied_confirmation_email",
     "send_leave_decision_email",
