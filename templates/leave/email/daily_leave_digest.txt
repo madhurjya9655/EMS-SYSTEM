@@ -1,0 +1,5 @@
+DAILY DIGEST - {{ digest_date|date:"l, d M Y" }}
+
+Employees on leave:
+{% for leave in leaves %}- {{ leave.employee.get_full_name|default:leave.employee.username }}: {{ leave.start_date|date:"d M Y" }} to {{ leave.end_date|date:"d M Y" }} | {{ leave.leave_type.name }} | {% if leave.is_half_day %}Half Day{% else %}Full Day{% endif %} | {{ leave.get_status_display }}
+{% endfor %}

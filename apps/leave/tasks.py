@@ -311,3 +311,17 @@ def send_leave_decision_email_async(self, leave_id: int):
     except Exception as exc:
         logger.error("Error sending leave decision email for #%s: %s", leave_id, exc)
         raise self.retry(exc=exc, countdown=60)
+
+@shared_task(bind=True, max_retries=3, name="leave.send_daily_leave_digest")
+def send_daily_leave_digest(self, target_date_iso: str | None = None):
+    """Send the all-employee leave digest only when someone is on leave."""
+    try:
+        from datetime import date
+        from .services.daily_digest import send_daily_leave_digest_email
+
+        target_date = date.fromisoformat(target_date_iso) if target_date_iso else None
+        sent = send_daily_leave_digest_email(target_date=target_date)
+        return f"Daily leave digest sent={sent}"
+    except Exception as exc:
+        logger.exception("Daily leave digest failed: %s", exc)
+        raise self.retry(exc=exc, countdown=60 * (2 ** self.request.retries))

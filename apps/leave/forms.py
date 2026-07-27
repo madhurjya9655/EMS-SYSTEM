@@ -495,6 +495,28 @@ class AdminLeaveEditForm(forms.ModelForm):
             inst.save()
         return inst
 
+
+class EmployeeLeaveEditForm(AdminLeaveEditForm):
+    """Employee edit form for an existing pending or approved leave.
+
+    Employees may change leave type, dates, half/full-day duration, exact half-day
+    times, reason and attachment. Workflow status and decision fields are never
+    exposed to the employee.
+    """
+
+    class Meta(AdminLeaveEditForm.Meta):
+        model = LeaveRequest
+        fields = [
+            "leave_type",
+            "start_at",
+            "end_at",
+            "reason",
+            "attachment",
+            "duration_type",
+            "from_time",
+            "to_time",
+        ]
+
 class LeaveEmailSettingsForm(forms.ModelForm):
     """Simple global Leave TO and CC recipient settings form."""
 

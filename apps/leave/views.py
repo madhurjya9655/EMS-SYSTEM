@@ -27,7 +27,7 @@ from django.views.decorators.http import require_GET, require_POST
 
 from apps.users.permissions import has_permission
 from apps.users.routing import recipients_for_leave
-from .forms import LeaveEmailSettingsForm, LeaveRequestForm
+from .forms import EmployeeLeaveEditForm, LeaveEmailSettingsForm, LeaveRequestForm
 from .models import (
     ApproverMapping,
     CCConfiguration,
@@ -61,10 +61,11 @@ except Exception:
     DecisionAction = None
 
 try:
-    from .tasks import send_handover_emails_async, send_leave_emails_async
+    from .tasks import send_daily_leave_digest, send_handover_emails_async, send_leave_emails_async
 except Exception:
     send_leave_emails_async = None
     send_handover_emails_async = None
+    send_daily_leave_digest = None
 
 logger = logging.getLogger(__name__)
 
@@ -869,6 +870,8 @@ def apply_leave(request: HttpRequest) -> HttpResponse:
                                         "Post-commit: relying on model/signals to apply handover & send emails for leave %s",
                                         lr.id,
                                     )
+                                    if send_daily_leave_digest is not None:
+                                        send_daily_leave_digest.delay()
                                 except Exception as e:
                                     logger.error("Post-commit hook (noop) failed for leave %s: %s", lr.id, e)
 
@@ -934,6 +937,123 @@ def apply_leave(request: HttpRequest) -> HttpResponse:
             "employee_header": header,
             "now_ist": now,
             "can_apply_now": can_apply_now,
+        },
+    )
+
+
+@has_permission("leave_apply")
+@login_required
+def edit_leave(request: HttpRequest, pk: int) -> HttpResponse:
+    """Allow an employee to update their own pending or approved leave.
+
+    Pending leave continues to block tasks immediately. If an already-approved
+    leave is materially changed, it is returned to PENDING for manager review;
+    PENDING still blocks tasks, so there is no task-blocking gap.
+    """
+    leave = get_object_or_404(
+        LeaveRequest.objects.select_related("leave_type", "employee"),
+        pk=pk,
+        employee=request.user,
+    )
+
+    if leave.status not in (LeaveStatus.PENDING, LeaveStatus.APPROVED):
+        messages.error(request, "Only pending or approved leave requests can be updated.")
+        return redirect("leave:my_leaves")
+
+    header = _employee_header(request.user)
+    original_status = leave.status
+    original_values = {
+        "leave_type_id": leave.leave_type_id,
+        "start_at": leave.start_at,
+        "end_at": leave.end_at,
+        "is_half_day": leave.is_half_day,
+        "reason": leave.reason,
+        "attachment": getattr(leave.attachment, "name", ""),
+    }
+
+    if request.method == "POST":
+        form = EmployeeLeaveEditForm(request.POST, request.FILES, instance=leave)
+        if form.is_valid():
+            try:
+                with transaction.atomic():
+                    updated = form.save(commit=False)
+                    new_attachment = getattr(updated.attachment, "name", "")
+                    materially_changed = any((
+                        original_values["leave_type_id"] != updated.leave_type_id,
+                        original_values["start_at"] != updated.start_at,
+                        original_values["end_at"] != updated.end_at,
+                        original_values["is_half_day"] != updated.is_half_day,
+                        original_values["reason"] != updated.reason,
+                        original_values["attachment"] != new_attachment,
+                    ))
+
+                    if original_status == LeaveStatus.APPROVED and materially_changed:
+                        updated.status = LeaveStatus.PENDING
+                        updated.approver = None
+                        updated.decided_at = None
+                        updated.decision_comment = ""
+
+                    updated.save()
+                    form.save_m2m()
+
+                    def _after_commit():
+                        try:
+                            _resync_leave_task_skips_for_employee(
+                                request.user,
+                                exclude_handover=True,
+                            )
+                        except Exception:
+                            logger.exception("Post-edit task skip re-sync failed for leave %s", updated.id)
+
+                        try:
+                            if send_leave_emails_async is not None:
+                                send_leave_emails_async.delay(updated.id)
+                            elif send_leave_request_email is not None:
+                                manager_email, cc_list = _routing_for_leave(updated)
+                                send_leave_request_email(
+                                    updated,
+                                    manager_email=manager_email,
+                                    cc_list=cc_list,
+                                    force=True,
+                                )
+                        except Exception:
+                            logger.exception("Updated leave notification failed for leave %s", updated.id)
+
+                        try:
+                            if send_daily_leave_digest is not None:
+                                send_daily_leave_digest.delay()
+                        except Exception:
+                            logger.exception("Leave digest dispatch failed after edit for leave %s", updated.id)
+
+                    transaction.on_commit(_after_commit)
+
+                if original_status == LeaveStatus.APPROVED and materially_changed:
+                    messages.success(
+                        request,
+                        "Leave updated successfully and returned to Pending for manager review. Task blocking remains active.",
+                    )
+                else:
+                    messages.success(request, "Leave updated successfully. Task blocking has been recalculated.")
+                return redirect("leave:my_leaves")
+            except ValidationError as exc:
+                for msg in getattr(exc, "messages", []) or [str(exc)]:
+                    messages.error(request, msg)
+            except Exception:
+                logger.exception("Employee leave edit failed for leave %s", leave.id)
+                messages.error(request, "Could not update the leave. Please try again.")
+        else:
+            messages.error(request, "Please fix the errors below.")
+    else:
+        form = EmployeeLeaveEditForm(instance=leave)
+
+    return render(
+        request,
+        "leave/edit_leave.html",
+        {
+            "form": form,
+            "leave": leave,
+            "employee_header": header,
+            "now_ist": now_ist(),
         },
     )
 

@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% load tz static crispy_forms_tags %}
+
+{% block title %}Update Leave{% endblock %}
+{% block navbar_title %}Update Leave{% endblock %}
+{% block breadcrumb %}Leave / Update{% endblock %}
+{% block page_title %}Update Leave{% endblock %}
+
+{% block content %}
+<div class="container-xxl py-4">
+  {% if messages %}
+    {% for message in messages %}
+      <div class="alert alert-{{ message.tags|default:'info' }}">{{ message }}</div>
+    {% endfor %}
+  {% endif %}
+
+  <div class="card border-0 shadow-sm" style="border-radius:18px;">
+    <div class="card-body p-3 p-md-4">
+      <div class="d-flex justify-content-between align-items-start gap-3 flex-wrap mb-4">
+        <div>
+          <h3 class="mb-1">Update Leave #{{ leave.id }}</h3>
+          <div class="text-muted small">
+            Pending leave blocks tasks immediately. Updating an approved leave returns it to Pending for manager review without removing task blocking.
+          </div>
+        </div>
+        <a href="{% url 'leave:my_leaves' %}" class="btn btn-light">
+          <i class="fa-solid fa-arrow-left me-1"></i>My Leaves
+        </a>
+      </div>
+
+      <form method="post" enctype="multipart/form-data" novalidate>
+        {% csrf_token %}
+        {% if form.non_field_errors %}
+          <div class="alert alert-danger">{{ form.non_field_errors }}</div>
+        {% endif %}
+
+        <div class="row g-3">
+          <div class="col-md-6">
+            <label class="form-label">Duration</label>
+            <div class="d-flex gap-3 flex-wrap" id="durationRadios">
+              {% for val, label in form.duration_type.field.choices %}
+                <label class="border rounded-3 px-3 py-2 bg-white">
+                  <input type="radio" name="{{ form.duration_type.html_name }}" value="{{ val }}"
+                         {% if form.duration_type.value == val %}checked{% endif %}>
+                  <span class="ms-1 fw-semibold">{{ label }}</span>
+                </label>
+              {% endfor %}
+            </div>
+            {% if form.duration_type.errors %}<div class="text-danger small">{{ form.duration_type.errors|striptags }}</div>{% endif %}
+          </div>
+          <div class="col-md-6">{{ form.leave_type|as_crispy_field }}</div>
+          <div class="col-md-6">{{ form.start_at|as_crispy_field }}</div>
+          <div class="col-md-6">{{ form.end_at|as_crispy_field }}</div>
+        </div>
+
+        <div id="half-day-slot" class="row g-3 mt-1" style="display:none;">
+          <div class="col-md-6">{{ form.from_time|as_crispy_field }}</div>
+          <div class="col-md-6">{{ form.to_time|as_crispy_field }}</div>
+        </div>
+
+        <div class="mt-3">{{ form.reason|as_crispy_field }}</div>
+        <div class="mt-3">{{ form.attachment|as_crispy_field }}</div>
+        {% if leave.attachment %}
+          <div class="small mb-3">Current attachment: <a href="{{ leave.attachment.url }}" target="_blank" rel="noopener">Open</a></div>
+        {% endif %}
+
+        <div class="d-flex justify-content-end gap-2 mt-4">
+          <a href="{% url 'leave:my_leaves' %}" class="btn btn-light">Cancel</a>
+          <button type="submit" class="btn btn-primary">
+            <i class="fa-solid fa-floppy-disk me-1"></i>Update Leave
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+  var radios = document.getElementsByName('duration_type');
+  var slot = document.getElementById('half-day-slot');
+  function refresh() {
+    var half = false;
+    for (var i = 0; i < radios.length; i++) {
+      if (radios[i].checked && radios[i].value === 'HALF') half = true;
+    }
+    if (slot) slot.style.display = half ? '' : 'none';
+  }
+  for (var i = 0; i < radios.length; i++) radios[i].addEventListener('change', refresh);
+  refresh();
+});
+</script>
+{% endblock %}

@@ -601,6 +601,12 @@
             <td class="action-cell">
               <div style="display:inline-flex;gap:5px;justify-content:flex-end;">
                 {% if not is_viewing_other %}
+                <a href="{% url 'leave:edit_leave' lr.id %}"
+                   class="btn btn-sm"
+                   style="background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe;"
+                   title="Update leave">
+                  <i class="fa-solid fa-pen-to-square"></i>
+                </a>
                 <form method="post"
                       action="{% url 'leave:delete_leave' lr.id %}"
                       onsubmit="return confirm('Delete this pending leave?');"
@@ -780,6 +786,16 @@
 
             <td class="action-cell">
               <div style="display:inline-flex;gap:5px;justify-content:flex-end;">
+                {% if lr.status == 'PENDING' or lr.status == 'APPROVED' %}
+                  {% if not is_viewing_other %}
+                  <a href="{% url 'leave:edit_leave' lr.id %}"
+                     class="btn btn-sm"
+                     style="background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe;"
+                     title="Update leave">
+                    <i class="fa-solid fa-pen-to-square"></i>
+                  </a>
+                  {% endif %}
+                {% endif %}
                 {% if lr.status == 'PENDING' and not is_viewing_other %}
                 <form method="post"
                       action="{% url 'leave:delete_leave' lr.id %}"
