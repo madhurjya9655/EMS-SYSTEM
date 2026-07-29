@@ -1,22 +1,19 @@
 {% load permission_tags %}
 
-{#
-  Admin Edit button snippet.
+{% comment %}
+Admin Edit button snippet.
 
-  Visible only to:
-  - Superusers
-  - Users recognized as administrators by the is_admin filter
+Visible only to:
+- Superusers
+- Users recognized as administrators by the is_admin filter
 
-  Uses the Leave module's custom admin edit route:
-      leave:admin_edit_leave
+Uses the Leave module custom admin edit route:
+    leave:admin_edit_leave
 
-  This avoids depending on Django Admin's generated URL:
-      admin:leave_leaverequest_change
-
-  Required context:
-  - leave: LeaveRequest object, optional
-  - next_url: URL to return to after editing, optional
-#}
+Expected context:
+- leave: LeaveRequest instance, optional
+- next_url: return URL, optional
+{% endcomment %}
 
 {% if request.user|is_admin %}
   {% if leave %}
