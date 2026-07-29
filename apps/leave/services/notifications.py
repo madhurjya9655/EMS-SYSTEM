@@ -15,6 +15,7 @@ from django.core.mail import EmailMultiAlternatives, get_connection
 from django.template.loader import get_template
 from django.urls import reverse
 from django.utils import timezone
+from django.utils.html import escape
 
 from apps.leave.models import (
     LeaveRequest,
@@ -471,6 +472,194 @@ def _resolve_recipients(
     return to_addr, cc
 
 
+
+def _build_leave_cc_fyi_message(
+    *,
+    leave: LeaveRequest,
+    employee_name: str,
+    leave_type_name: str,
+    handover_summary: List[Dict],
+) -> Tuple[str, str]:
+    """
+    Build the information-only message sent to Leave CC recipients.
+
+    Security rule:
+    - No approval URL.
+    - No rejection URL.
+    - No signed token.
+    - No manager action page link.
+
+    CC recipients are observers only.
+    """
+    employee_email = (
+        leave.employee_email
+        or getattr(leave.employee, "email", "")
+        or ""
+    ).strip()
+
+    start_at_ist = _format_ist(leave.start_at)
+    end_at_ist = _format_ist(leave.end_at)
+    duration_days = _duration_days_ist(leave)
+    reason = leave.reason or ""
+    half_day_label = "Yes" if bool(getattr(leave, "is_half_day", False)) else "No"
+
+    text_lines = [
+        "Leave Request — Information Only",
+        "",
+        "You are receiving this email as a CC recipient.",
+        "Only the assigned Reporting Person in the TO field can approve or reject this leave.",
+        "",
+        f"Leave ID: {leave.id}",
+        f"Employee: {employee_name}",
+        f"Employee Email: {employee_email or '-'}",
+        f"Leave Type: {leave_type_name}",
+        f"From (IST): {start_at_ist}",
+        f"To (IST): {end_at_ist}",
+        f"Duration: {duration_days:g} day(s)",
+        f"Half Day: {half_day_label}",
+        f"Reason: {reason or '-'}",
+    ]
+
+    if handover_summary:
+        text_lines.extend(["", "Task Handovers:"])
+
+        for item in handover_summary:
+            text_lines.append(
+                "- {task_type} #{task_id}: {task_title} -> {assignee_name}".format(
+                    task_type=item.get("task_type") or "Task",
+                    task_id=item.get("task_id") or "-",
+                    task_title=item.get("task_title") or "-",
+                    assignee_name=item.get("assignee_name") or "-",
+                )
+            )
+
+    text_lines.extend(
+        [
+            "",
+            "No action is required from you.",
+            "Approve and Reject actions are available only to the assigned Reporting Person.",
+        ]
+    )
+
+    txt = "\n".join(text_lines)
+
+    handover_html = ""
+
+    if handover_summary:
+        rows = []
+
+        for item in handover_summary:
+            rows.append(
+                "<li>"
+                f"<strong>{escape(str(item.get('task_type') or 'Task'))} "
+                f"#{escape(str(item.get('task_id') or '-'))}</strong>: "
+                f"{escape(str(item.get('task_title') or '-'))} "
+                f"&rarr; {escape(str(item.get('assignee_name') or '-'))}"
+                "</li>"
+            )
+
+        handover_html = (
+            "<h3 style=\"margin:24px 0 8px;font-size:16px;\">Task Handovers</h3>"
+            "<ul style=\"margin:0;padding-left:20px;\">"
+            + "".join(rows)
+            + "</ul>"
+        )
+
+    html = f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Leave Request — Information Only</title>
+</head>
+<body style="margin:0;padding:24px;background:#f5f7fb;font-family:Arial,sans-serif;color:#1f2937;">
+  <div style="max-width:680px;margin:0 auto;background:#ffffff;border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;">
+    <div style="padding:20px 24px;background:#eff6ff;border-bottom:1px solid #bfdbfe;">
+      <h1 style="margin:0;font-size:20px;color:#1d4ed8;">Leave Request — Information Only</h1>
+    </div>
+
+    <div style="padding:24px;">
+      <div style="padding:12px 14px;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;color:#92400e;margin-bottom:20px;">
+        You are receiving this email as a CC recipient. Only the assigned Reporting Person
+        in the TO field can approve or reject this leave.
+      </div>
+
+      <table role="presentation" style="width:100%;border-collapse:collapse;">
+        <tr><td style="padding:7px 0;font-weight:bold;width:170px;">Leave ID</td><td style="padding:7px 0;">#{escape(str(leave.id))}</td></tr>
+        <tr><td style="padding:7px 0;font-weight:bold;">Employee</td><td style="padding:7px 0;">{escape(employee_name)}</td></tr>
+        <tr><td style="padding:7px 0;font-weight:bold;">Employee Email</td><td style="padding:7px 0;">{escape(employee_email or '-')}</td></tr>
+        <tr><td style="padding:7px 0;font-weight:bold;">Leave Type</td><td style="padding:7px 0;">{escape(leave_type_name)}</td></tr>
+        <tr><td style="padding:7px 0;font-weight:bold;">From (IST)</td><td style="padding:7px 0;">{escape(start_at_ist)}</td></tr>
+        <tr><td style="padding:7px 0;font-weight:bold;">To (IST)</td><td style="padding:7px 0;">{escape(end_at_ist)}</td></tr>
+        <tr><td style="padding:7px 0;font-weight:bold;">Duration</td><td style="padding:7px 0;">{duration_days:g} day(s)</td></tr>
+        <tr><td style="padding:7px 0;font-weight:bold;">Half Day</td><td style="padding:7px 0;">{half_day_label}</td></tr>
+        <tr><td style="padding:7px 0;font-weight:bold;vertical-align:top;">Reason</td><td style="padding:7px 0;">{escape(reason or '-')}</td></tr>
+      </table>
+
+      {handover_html}
+
+      <div style="margin-top:24px;padding:12px 14px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;color:#4b5563;">
+        No action is required from you. This message intentionally contains no Approve or Reject links.
+      </div>
+    </div>
+  </div>
+</body>
+</html>"""
+
+    return html, txt
+
+
+def _send_leave_cc_fyi_emails(
+    *,
+    leave: LeaveRequest,
+    cc_emails: Iterable[str],
+    employee_name: str,
+    leave_type_name: str,
+    handover_summary: List[Dict],
+    reply_to: List[str],
+) -> Tuple[int, List[str]]:
+    """
+    Send one private information-only email to each CC recipient.
+
+    Each CC address is used as the message TO address so recipients do not see
+    other CC recipients. No action links or signed tokens are included.
+    """
+    recipients = _dedupe_lower(cc_emails)
+    if not recipients:
+        return 0, []
+
+    html, txt = _build_leave_cc_fyi_message(
+        leave=leave,
+        employee_name=employee_name,
+        leave_type_name=leave_type_name,
+        handover_summary=handover_summary,
+    )
+
+    subject = (
+        f"FYI: Leave Request - {employee_name} ({leave_type_name})"
+    )
+
+    sent_count = 0
+    failed: List[str] = []
+
+    for recipient in recipients:
+        ok = _send(
+            subject,
+            recipient,
+            cc=[],
+            reply_to=reply_to,
+            html=html,
+            txt=txt,
+        )
+
+        if ok:
+            sent_count += 1
+        else:
+            failed.append(recipient)
+
+    return sent_count, failed
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -483,10 +672,23 @@ def send_leave_request_email(
     force: bool = False,
 ) -> None:
     """
-    Send manager / reporting-person leave request email.
+    Send the Leave request using two strictly separated message types.
 
-    This email contains approval/rejection links and should NOT be sent to
-    the employee as their confirmation email.
+    TO / Reporting Person:
+    - Receives the actionable Leave request email.
+    - Receives Approve and Reject links.
+    - Is the only person allowed to decide the Leave.
+
+    CC recipients:
+    - Receive separate information-only emails.
+    - Receive no Approve link.
+    - Receive no Reject link.
+    - Receive no signed decision token.
+    - Cannot see other CC recipient addresses.
+
+    This separation prevents action links from being exposed to CC recipients.
+    Backend authorization must still enforce that only the authenticated
+    LeaveRequest.reporting_person may approve or reject.
     """
     if not _email_enabled():
         logger.info(
@@ -515,23 +717,36 @@ def send_leave_request_email(
         )
         return
 
+    # Signed tokens are generated only for the TO / Reporting Person.
     tokens = _build_token_links(leave, to_addr)
 
-    approval_page_url = _abs_url(reverse("leave:approval_page", args=[leave.id]))
+    approval_page_url = _abs_url(
+        reverse("leave:approval_page", args=[leave.id])
+    )
     approve_url = f"{approval_page_url}?a=APPROVED"
     reject_url = f"{approval_page_url}?a=REJECTED"
 
-    employee_name = leave.employee_name or _employee_display_name(leave.employee)
+    employee_name = (
+        leave.employee_name
+        or _employee_display_name(leave.employee)
+    )
     manager_name = _manager_display_name(leave, to_addr)
-    leave_type_name = getattr(leave.leave_type, "name", str(leave.leave_type))
+    leave_type_name = getattr(
+        leave.leave_type,
+        "name",
+        str(leave.leave_type),
+    )
 
-    subject = f"Leave Request - {employee_name} ({leave_type_name})"
+    subject = (
+        f"Leave Request - {employee_name} ({leave_type_name})"
+    )
 
-    handover_summary = []
+    handover_summary: List[Dict] = []
 
     try:
         handovers = (
-            LeaveHandover.objects.filter(leave_request=leave)
+            LeaveHandover.objects
+            .filter(leave_request=leave)
             .select_related("new_assignee")
         )
 
@@ -545,14 +760,25 @@ def send_leave_request_email(
                     "task_id": handover.original_task_id,
                     "task_title": task_title,
                     "task_url": task_url,
-                    "assignee_name": _employee_display_name(handover.new_assignee),
+                    "assignee_name": _employee_display_name(
+                        handover.new_assignee
+                    ),
                     "message": handover.message,
                 }
             )
     except Exception:
-        pass
+        logger.exception(
+            "Could not build handover summary for leave #%s.",
+            leave.id,
+        )
 
-    ctx = {
+    employee_email = (
+        leave.employee_email
+        or getattr(leave.employee, "email", "")
+        or ""
+    ).strip()
+
+    manager_ctx = {
         "site_url": _site_base().rstrip("/"),
         "leave_id": leave.id,
         "leave_type": leave_type_name,
@@ -560,56 +786,96 @@ def send_leave_request_email(
         "end_at_ist": _format_ist(leave.end_at),
         "reason": leave.reason or "",
         "employee_name": employee_name,
-        "employee_email": (
-            leave.employee_email
-            or getattr(leave.employee, "email", "")
+        "employee_email": employee_email,
+        "employee_designation": (
+            getattr(leave, "employee_designation", "")
             or ""
-        ).strip(),
-        "employee_designation": getattr(leave, "employee_designation", "") or "",
-        "is_half_day": bool(getattr(leave, "is_half_day", False)),
+        ),
+        "is_half_day": bool(
+            getattr(leave, "is_half_day", False)
+        ),
         "duration_days": _duration_days_ist(leave),
         "manager_name": manager_name,
         "manager_email": to_addr,
-        "cc_list": list(cc or []),
+
+        # The actionable manager email must not expose CC recipients.
+        "cc_list": [],
+
         "handover_summary": handover_summary,
-        "has_handovers": len(handover_summary) > 0,
+        "has_handovers": bool(handover_summary),
         "approve_url": approve_url,
         "reject_url": reject_url,
         "approval_page_url": approval_page_url,
         "token_approve_url": tokens.approve,
         "token_reject_url": tokens.reject,
+        "is_actionable_recipient": True,
+        "is_cc_information_only": False,
     }
 
-    html, txt = _render_pair(
+    manager_html, manager_txt = _render_pair(
         "email/leave_applied.html",
         "email/leave_applied.txt",
-        ctx,
+        manager_ctx,
     )
 
-    reply_to = [e for e in [ctx["employee_email"]] if e]
+    reply_to = [employee_email] if employee_email else []
 
-    ok = _send(
+    # Manager email is sent only to TO. CC is deliberately empty because the
+    # manager message contains approval and rejection links.
+    manager_ok = _send(
         subject,
         to_addr,
-        cc=list(cc or []),
+        cc=[],
         reply_to=reply_to,
-        html=html,
-        txt=txt,
+        html=manager_html,
+        txt=manager_txt,
     )
 
-    if not ok:
+    if not manager_ok:
         logger.error(
-            "Leave request email NOT delivered for leave #%s.",
+            "Actionable Leave request email NOT delivered to TO=%s for leave #%s. "
+            "CC information emails were not sent.",
+            to_addr,
             leave.id,
         )
         return
+
+    cc_sent_count, cc_failed = _send_leave_cc_fyi_emails(
+        leave=leave,
+        cc_emails=cc,
+        employee_name=employee_name,
+        leave_type_name=leave_type_name,
+        handover_summary=handover_summary,
+        reply_to=reply_to,
+    )
+
+    if cc_failed:
+        logger.error(
+            "Some Leave CC information emails failed for leave #%s: %s",
+            leave.id,
+            cc_failed,
+        )
+
+    logger.info(
+        "Leave request delivery complete for leave #%s: actionable_to=%s "
+        "information_cc_sent=%s information_cc_failed=%s",
+        leave.id,
+        to_addr,
+        cc_sent_count,
+        len(cc_failed),
+    )
 
     try:
         if LeaveDecisionAudit and DecisionAction:
             LeaveDecisionAudit.log(
                 leave,
                 DecisionAction.EMAIL_SENT,
-                extra={"kind": "request"},
+                extra={
+                    "kind": "request",
+                    "actionable_to": to_addr,
+                    "information_cc_sent": cc_sent_count,
+                    "information_cc_failed": cc_failed,
+                },
             )
     except Exception:
         logger.exception(
