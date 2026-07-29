@@ -1,18 +1,41 @@
 {% load permission_tags %}
-{# Admin Edit button snippet. Visible to admins (superuser or Admin group). #}
+
+{#
+  Admin Edit button snippet.
+
+  Visible only to:
+  - Superusers
+  - Users recognized as administrators by the is_admin filter
+
+  Uses the Leave module's custom admin edit route:
+      leave:admin_edit_leave
+
+  This avoids depending on Django Admin's generated URL:
+      admin:leave_leaverequest_change
+
+  Required context:
+  - leave: LeaveRequest object, optional
+  - next_url: URL to return to after editing, optional
+#}
 
 {% if request.user|is_admin %}
   {% if leave %}
-    <a href="{% url 'admin:leave_leaverequest_change' leave.id %}?_changelist_filters=next={{ next_url|urlencode }}"
-       class="btn btn-outline-dark btn-sm"
-       title="Open in Admin">
-      <i class="fa-solid fa-wrench"></i>
+    <a
+      href="{% url 'leave:admin_edit_leave' leave.id %}{% if next_url %}?next={{ next_url|urlencode }}{% endif %}"
+      class="btn btn-outline-dark btn-sm"
+      title="Admin Edit Leave"
+      aria-label="Admin Edit Leave Request {{ leave.id }}"
+    >
+      <i class="fa-solid fa-wrench" aria-hidden="true"></i>
     </a>
   {% else %}
-    <a href="{% url 'admin:leave_leaverequest_changelist' %}"
-       class="btn btn-outline-dark btn-sm"
-       title="Open Leave Requests in Admin">
-      <i class="fa-solid fa-wrench"></i>
+    <a
+      href="{% url 'leave:admin_leave_balance' %}"
+      class="btn btn-outline-dark btn-sm"
+      title="Open Leave Administration"
+      aria-label="Open Leave Administration"
+    >
+      <i class="fa-solid fa-wrench" aria-hidden="true"></i>
     </a>
   {% endif %}
 {% endif %}
