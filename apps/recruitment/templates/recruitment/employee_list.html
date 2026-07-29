@@ -455,10 +455,10 @@
 <div class="info-card">
   <h6><i class="fas fa-circle-info me-1"></i> CC Configuration Guide</h6>
   <ul>
-    <li><strong>Default CC (Mapping)</strong> — optional single person tied to the employee's approver mapping.</li>
-    <li><strong>CC Options</strong> — global pool employees can pick <em>multiple</em> CCs from per leave request.</li>
-    <li>Use <strong>CC Options</strong> to control who appears in the global pool.</li>
-    <li>Use <strong>Assign CC</strong> to set a default CC person per employee.</li>
+    <li><strong>Reporting Officer</strong> is the Leave approval email <strong>TO</strong> recipient.</li>
+    <li><strong>Default Leave CC</strong> supports multiple recipients through the employee's approver mapping.</li>
+    <li>Use <strong>CC Options</strong> to control which active users are available in the CC selection pool.</li>
+    <li>Use the row-level <strong>Edit</strong> button to update an existing employee's Leave TO and CC mapping.</li>
   </ul>
 </div>
 {% endif %}
@@ -499,13 +499,43 @@
               <input type="text" class="form-control" name="md_name" placeholder="Managing Director name">
             </div>
             <div class="col-md-6">
-              <label class="form-label">Reporting Officer</label>
-              <input type="text" class="form-control" name="reporting_officer" placeholder="Full name or email">
+              <label class="form-label">Reporting Officer / Leave TO</label>
+              <select class="form-select" name="reporting_person_id">
+                <option value="">— No reporting officer —</option>
+                {% for option_user in routing_users %}
+                  <option value="{{ option_user.id }}">
+                    {{ option_user.get_full_name|default:option_user.username }}
+                    {% if option_user.email %} — {{ option_user.email }}{% endif %}
+                  </option>
+                {% endfor %}
+              </select>
+              <div class="form-text">
+                Leave approval emails will be sent to this person.
+              </div>
             </div>
+
             <div class="col-md-6">
-              <label class="form-label">Default CC <span class="text-muted fw-normal">(optional)</span></label>
-              <input type="email" class="form-control" name="cc_email" placeholder="single default CC email">
-              <div class="form-text">Employees can still add multiple CCs from the CC pool per request.</div>
+              <label class="form-label">
+                Default Leave CC
+                <span class="text-muted fw-normal">(optional, multiple)</span>
+              </label>
+              <select class="form-select"
+                      name="default_cc_users"
+                      multiple
+                      size="6">
+                {% for option_user in cc_option_users %}
+                  <option value="{{ option_user.id }}">
+                    {{ option_user.get_full_name|default:option_user.username }}
+                    {% if option_user.email %} — {{ option_user.email }}{% endif %}
+                  </option>
+                {% empty %}
+                  <option value="" disabled>No active users are configured in CC Options.</option>
+                {% endfor %}
+              </select>
+              <div class="form-text">
+                Hold Ctrl on Windows or Command on macOS to select multiple recipients.
+                These users become the employee's default Leave CC list.
+              </div>
             </div>
             <div class="col-md-6">
               <label class="form-label">Employee Designation</label>

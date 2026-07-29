@@ -154,6 +154,35 @@ class EmployeeListView(LoginRequiredMixin, ListView):
                 }
             )
 
+        # Active users available as Reporting Officers.
+        ctx["routing_users"] = list(
+            User.objects.filter(is_active=True)
+            .exclude(email__isnull=True)
+            .exclude(email__exact="")
+            .order_by("first_name", "last_name", "username")
+        )
+
+        # Active global CC pool available in the Add Employee modal.
+        ctx["cc_option_users"] = [
+            config.user
+            for config in (
+                CCConfiguration.objects.filter(
+                    is_active=True,
+                    user__is_active=True,
+                )
+                .select_related("user")
+                .exclude(user__email__isnull=True)
+                .exclude(user__email__exact="")
+                .order_by(
+                    "sort_order",
+                    "department",
+                    "user__first_name",
+                    "user__last_name",
+                    "user__username",
+                )
+            )
+        ]
+
         ctx["rows"] = rows
         return ctx
 
@@ -301,7 +330,7 @@ def employee_create(request):
             "phone": mobile,
             "department": designation,
             "is_active": user.is_active,
-                    "reporting_officer_id": mapping.reporting_person_id if mapping else None,
+            "reporting_officer": None,
         },
     )
 
@@ -524,7 +553,7 @@ class EmployeeCreateView(LoginRequiredMixin, CreateView):
     template_name = "recruitment/employee_form.html"
 
     def get_success_url(self):
-        return reverse("employee_detail", args=[self.object.pk])
+        return reverse("recruitment:employee_detail", args=[self.object.pk])
 
 
 class EmployeeDetailView(LoginRequiredMixin, DetailView):
@@ -539,14 +568,14 @@ class EmployeeUpdateView(LoginRequiredMixin, UpdateView):
     model = Employee
     form_class = EmployeeForm
     template_name = "recruitment/employee_form.html"
-    success_url = reverse_lazy("employee_list")
+    success_url = reverse_lazy("recruitment:employee_list")
 
 
 class EmployeeDeleteView(LoginRequiredMixin, DeleteView):
     login_url = "login"
     model = Employee
     template_name = "recruitment/employee_confirm_delete.html"
-    success_url = reverse_lazy("employee_list")
+    success_url = reverse_lazy("recruitment:employee_list")
 
 
 # ---------------------------------------------------------------------

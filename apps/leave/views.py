@@ -197,11 +197,20 @@ def _role_for_email(leave: LeaveRequest, email: str) -> Optional[str]:
 
 
 def _can_manage(request_user, leave: LeaveRequest) -> bool:
+    """
+    Return True only when the authenticated user is the Leave request's
+    assigned Reporting Person (the email TO recipient).
+
+    CC recipients, staff users, and superusers are not approval authorities
+    unless they are also the assigned Reporting Person for this LeaveRequest.
+    """
     if not getattr(request_user, "is_authenticated", False):
         return False
-    if getattr(request_user, "is_superuser", False):
-        return True
-    return leave.reporting_person_id == getattr(request_user, "id", None)
+
+    return (
+        bool(getattr(leave, "reporting_person_id", None))
+        and leave.reporting_person_id == getattr(request_user, "id", None)
+    )
 
 
 def _safe_next_url(request: HttpRequest, default_name: str) -> str:
@@ -1504,95 +1513,91 @@ class TokenDecisionView(View):
 
         return False
 
-    def _get_authorized_decider_user(self, request: HttpRequest, leave: LeaveRequest, payload, actor_email: str):
+    def _get_authorized_decider_user(
+        self,
+        request: HttpRequest,
+        leave: LeaveRequest,
+        payload,
+        actor_email: str,
+    ):
         """
-        Public email approval authorization.
+        Authorize an email-token approval or rejection.
 
-        Valid approvers:
-        1. Logged-in superuser
-        2. Logged-in reporting person
-        3. Token actor email/user id matches leave.reporting_person
-        4. Token actor email/user id matches leave.approver, if already assigned
-        5. Token actor email/user id matches current ApproverMapping.reporting_person
-        6. Backward compatibility: old _role_for_email() says manager
+        Security rule:
+        - Only the authenticated Leave email TO recipient may decide.
+        - The TO recipient is the LeaveRequest.reporting_person snapshot.
+        - ApproverMapping.reporting_person is used only as a fallback when the
+          LeaveRequest has no reporting_person snapshot.
+        - CC recipients are never approval authorities.
+        - Possession of a forwarded email token is not sufficient.
+        - Staff and superusers receive no override unless they are the assigned
+          Reporting Person.
 
-        IMPORTANT:
-        This intentionally does NOT depend only on _role_for_email(),
-        because _role_for_email() uses routing lookup and can return None even when
-        leave.reporting_person is correctly stored in DB.
+        Requiring both the signed token identity and the authenticated account
+        prevents a CC recipient or forwarded-link recipient from acting.
         """
+        if not getattr(request.user, "is_authenticated", False):
+            return None
 
-        if request.user.is_authenticated:
-            if getattr(request.user, "is_superuser", False):
-                return request.user
+        authoritative_to = getattr(leave, "reporting_person", None)
 
-            if leave.reporting_person_id == getattr(request.user, "id", None):
-                return request.user
-
-        if self._user_matches_token_actor(getattr(leave, "reporting_person", None), payload, actor_email):
-            return leave.reporting_person
-
-        if self._user_matches_token_actor(getattr(leave, "approver", None), payload, actor_email):
-            return leave.approver
-
-        try:
-            mapping = (
-                ApproverMapping.objects
-                .select_related("reporting_person", "cc_person")
-                .prefetch_related("default_cc_users")
-                .filter(employee=leave.employee)
-                .first()
-            )
-
-            if mapping:
-                if self._user_matches_token_actor(getattr(mapping, "reporting_person", None), payload, actor_email):
-                    return mapping.reporting_person
-
-                # Keep this only for projects where cc_person is treated as approval authority.
-                if self._user_matches_token_actor(getattr(mapping, "cc_person", None), payload, actor_email):
-                    return mapping.cc_person
-
-                try:
-                    default_cc_user = mapping.default_cc_users.filter(
-                        email__iexact=actor_email,
-                        is_active=True,
-                    ).first()
-
-                    if default_cc_user:
-                        return default_cc_user
-
-                except Exception:
-                    logger.exception(
-                        "Failed checking default_cc_users for leave %s.",
-                        getattr(leave, "pk", None),
-                    )
-
-        except Exception:
-            logger.exception(
-                "Failed checking ApproverMapping for leave %s.",
-                getattr(leave, "pk", None),
-            )
-
-        if _role_for_email(leave, actor_email) == "manager":
+        if authoritative_to is None:
             try:
-                User = get_user_model()
-                actor_user = User.objects.filter(
-                    email__iexact=actor_email,
-                    is_active=True,
-                ).first()
-
-                if actor_user:
-                    return actor_user
-
+                mapping = (
+                    ApproverMapping.objects
+                    .select_related("reporting_person")
+                    .filter(employee=leave.employee)
+                    .first()
+                )
+                authoritative_to = (
+                    getattr(mapping, "reporting_person", None)
+                    if mapping
+                    else None
+                )
             except Exception:
                 logger.exception(
-                    "Failed loading fallback token actor user for leave %s.",
+                    "Failed resolving Reporting Person for leave %s.",
                     getattr(leave, "pk", None),
                 )
+                return None
 
-            return leave.reporting_person
+        if authoritative_to is None:
+            logger.warning(
+                "Leave %s has no Reporting Person; email decision denied.",
+                getattr(leave, "pk", None),
+            )
+            return None
 
-        return None
+        authenticated_user_id = int(getattr(request.user, "id", 0) or 0)
+        authoritative_user_id = int(getattr(authoritative_to, "id", 0) or 0)
+
+        if (
+            not authenticated_user_id
+            or authenticated_user_id != authoritative_user_id
+        ):
+            logger.warning(
+                "Email decision denied for leave %s: authenticated user %s "
+                "is not TO/reporting person %s.",
+                getattr(leave, "pk", None),
+                authenticated_user_id or None,
+                authoritative_user_id or None,
+            )
+            return None
+
+        if not self._user_matches_token_actor(
+            authoritative_to,
+            payload,
+            actor_email,
+        ):
+            logger.warning(
+                "Email decision denied for leave %s: signed token actor does "
+                "not match TO/reporting person %s.",
+                getattr(leave, "pk", None),
+                authoritative_user_id or None,
+            )
+            return None
+
+        return authoritative_to
 
     def _is_allowed(self, request: HttpRequest, leave: LeaveRequest, payload, actor_email: str) -> bool:
         return self._get_authorized_decider_user(
