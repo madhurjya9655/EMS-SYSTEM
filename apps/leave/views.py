@@ -870,8 +870,6 @@ def apply_leave(request: HttpRequest) -> HttpResponse:
                                         "Post-commit: relying on model/signals to apply handover & send emails for leave %s",
                                         lr.id,
                                     )
-                                    if send_daily_leave_digest is not None:
-                                        send_daily_leave_digest.delay()
                                 except Exception as e:
                                     logger.error("Post-commit hook (noop) failed for leave %s: %s", lr.id, e)
 
@@ -944,20 +942,15 @@ def apply_leave(request: HttpRequest) -> HttpResponse:
 @has_permission("leave_apply")
 @login_required
 def edit_leave(request: HttpRequest, pk: int) -> HttpResponse:
-    """Allow an employee to update their own pending or approved leave.
-
-    Pending leave continues to block tasks immediately. If an already-approved
-    leave is materially changed, it is returned to PENDING for manager review;
-    PENDING still blocks tasks, so there is no task-blocking gap.
-    """
+    """Allow an employee to update only their own pending leave."""
     leave = get_object_or_404(
         LeaveRequest.objects.select_related("leave_type", "employee"),
         pk=pk,
         employee=request.user,
     )
 
-    if leave.status not in (LeaveStatus.PENDING, LeaveStatus.APPROVED):
-        messages.error(request, "Only pending or approved leave requests can be updated.")
+    if leave.status != LeaveStatus.PENDING:
+        messages.error(request, "Only pending leave requests can be updated.")
         return redirect("leave:my_leaves")
 
     header = _employee_header(request.user)
@@ -1019,11 +1012,6 @@ def edit_leave(request: HttpRequest, pk: int) -> HttpResponse:
                         except Exception:
                             logger.exception("Updated leave notification failed for leave %s", updated.id)
 
-                        try:
-                            if send_daily_leave_digest is not None:
-                                send_daily_leave_digest.delay()
-                        except Exception:
-                            logger.exception("Leave digest dispatch failed after edit for leave %s", updated.id)
 
                     transaction.on_commit(_after_commit)
 

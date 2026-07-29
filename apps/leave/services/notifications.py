@@ -22,7 +22,6 @@ from apps.leave.models import (
     DecisionAction,
     LeaveHandover,
     ApproverMapping,
-    LeaveEmailSettings,
 )
 
 logger = logging.getLogger(__name__)
@@ -115,37 +114,16 @@ def resolve_leave_recipients(
     existing_cc: Optional[Iterable[str]] = None,
     reply_to_emails: Optional[Iterable[str]] = None,
 ) -> Tuple[List[str], List[str]]:
-    """Return final TO and CC lists for a Leave email.
+    """Return clean TO and CC lists without any global recipients.
 
-    The workflow-specific primary TO address is always preserved. Configured
-    ``to_users`` are added as additional TO recipients and configured
-    ``cc_users`` are added as CC recipients. Duplicate addresses are removed
-    case-insensitively. Any address already in TO or Reply-To is removed from CC.
+    Business rule:
+    - TO is the employee's reporting officer.
+    - CC contains only the employee's admin-managed Default CC users.
+    - Duplicate addresses are removed.
+    - An address already present in TO or Reply-To is removed from CC.
     """
-    global_to: List[str] = []
-    global_cc: List[str] = []
+    final_to = _dedupe_lower([primary_to])
 
-    try:
-        config = LeaveEmailSettings.get_solo()
-        if config.is_active:
-            global_to = list(
-                config.to_users.filter(is_active=True)
-                .exclude(email__isnull=True)
-                .exclude(email__exact="")
-                .values_list("email", flat=True)
-            )
-            global_cc = list(
-                config.cc_users.filter(is_active=True)
-                .exclude(email__isnull=True)
-                .exclude(email__exact="")
-                .values_list("email", flat=True)
-            )
-    except Exception:
-        logger.exception(
-            "Could not load LeaveEmailSettings; preserving workflow recipients."
-        )
-
-    final_to = _dedupe_lower([primary_to, *global_to])
     blocked_from_cc = {
         (email or "").strip().lower()
         for email in [*final_to, *(reply_to_emails or [])]
@@ -154,7 +132,8 @@ def resolve_leave_recipients(
 
     final_cc: List[str] = []
     seen = set()
-    for email in [*(existing_cc or []), *global_cc]:
+
+    for email in existing_cc or []:
         normalized = (email or "").strip().lower()
         if not normalized or normalized in seen or normalized in blocked_from_cc:
             continue
@@ -445,61 +424,51 @@ def _default_cc_emails_for_employee(emp: User) -> List[str]:
 
 def _resolve_recipients(
     leave: LeaveRequest,
-    manager_email: Optional[str],
-    cc_list: Optional[Iterable[str]],
+    manager_email: Optional[str] = None,
+    cc_list: Optional[Iterable[str]] = None,
 ) -> Tuple[str, List[str]]:
-    selected_ccs: List[str] = []
+    """Resolve recipients only from the employee's ApproverMapping.
+
+    The Employee page writes the reporting officer and Default CC users into
+    ApproverMapping. That mapping is the single source of truth. Legacy values
+    stored on an old LeaveRequest are used only when no mapping exists.
+    """
+    mapping_rp = None
+    mapping_cc_users: List[User] = []
 
     try:
-        selected_ccs = [
-            (u.email or "").strip().lower()
-            for u in leave.cc_users.all()
-            if getattr(u, "email", None)
-        ]
+        mapping_rp, mapping_cc_users = ApproverMapping.resolve_multi_for(leave.employee)
     except Exception:
-        selected_ccs = []
-
-    defaults = _default_cc_emails_for_employee(leave.employee)
-    explicit = [(e or "").strip().lower() for e in (cc_list or []) if e]
-    merged_cc = _dedupe_lower([*explicit, *selected_ccs, *defaults])
-
-    if manager_email:
-        return manager_email.strip().lower(), merged_cc
-
-    if getattr(leave, "reporting_person", None) and getattr(leave.reporting_person, "email", None):
-        to_addr = leave.reporting_person.email.strip().lower()
-
-        legacy_on_leave = []
-
-        if getattr(leave, "cc_person", None) and getattr(leave, "cc_person").email:
-            legacy_on_leave.append(leave.cc_person.email.strip().lower())
-
-        cc = _dedupe_lower([*merged_cc, *legacy_on_leave])
-
-        return to_addr, cc
-
-    try:
-        from apps.users.routing import recipients_for_leave
-
-        emp_email = (
-            leave.employee_email
-            or getattr(leave.employee, "email", "")
-            or ""
-        ).strip().lower()
-
-        mapping = recipients_for_leave(emp_email) or {}
-        to_addr = (mapping.get("to") or "").strip().lower()
-        dynamic_cc = [e.strip().lower() for e in (mapping.get("cc") or []) if e]
-        cc = _dedupe_lower([*merged_cc, *dynamic_cc])
-
-        return to_addr, cc
-
-    except Exception:
-        logger.warning(
-            "Could not resolve recipients for leave id=%s",
+        logger.exception(
+            "Could not resolve ApproverMapping for leave id=%s",
             getattr(leave, "id", None),
         )
-        return "", merged_cc
+
+    to_addr = ""
+    if mapping_rp and getattr(mapping_rp, "email", None):
+        to_addr = mapping_rp.email.strip().lower()
+    elif manager_email:
+        to_addr = manager_email.strip().lower()
+    elif getattr(leave, "reporting_person", None) and getattr(leave.reporting_person, "email", None):
+        to_addr = leave.reporting_person.email.strip().lower()
+
+    mapped_cc = [
+        (user.email or "").strip().lower()
+        for user in mapping_cc_users
+        if getattr(user, "email", None)
+    ]
+
+    # Existing cc_list is only a compatibility fallback when no Default CC is configured.
+    fallback_cc = [
+        (email or "").strip().lower()
+        for email in (cc_list or [])
+        if email
+    ]
+
+    cc = _dedupe_lower(mapped_cc if mapped_cc else fallback_cc)
+    cc = [email for email in cc if email != to_addr]
+
+    return to_addr, cc
 
 
 # ---------------------------------------------------------------------------
@@ -661,8 +630,9 @@ def send_leave_applied_confirmation_email(
     Shows available leave balance after application.
 
     Current production leave rule:
-    - Pending + Approved full-day leaves reduce paid balance.
-    - Half-day leave displays as 0.5 day but does not reduce paid balance.
+    - Pending + Approved leave reduces paid balance immediately.
+    - Half-day leave reduces paid balance by 0.5 day.
+    - Rejected and Cancelled leave does not reduce paid balance.
     """
     if not _email_enabled():
         logger.info(
@@ -856,18 +826,9 @@ def send_leave_decision_email(leave: LeaveRequest) -> None:
         if getattr(leave.approver, "email", ""):
             reply_to.append(leave.approver.email)
         else:
-            from apps.users.routing import recipients_for_leave
-
-            emp_email = (
-                leave.employee_email
-                or getattr(leave.employee, "email", "")
-                or ""
-            ).strip()
-
-            routing = recipients_for_leave(emp_email)
-
-            if routing.get("to"):
-                reply_to.append(routing["to"])
+            reporting_person, _cc_users = ApproverMapping.resolve_multi_for(leave.employee)
+            if reporting_person and getattr(reporting_person, "email", None):
+                reply_to.append(reporting_person.email)
     except Exception:
         pass
 
@@ -1292,7 +1253,6 @@ def send_handover_completion_email(handover: LeaveHandover) -> None:
 
 __all__ = [
     "resolve_leave_recipients",
-    "resolve_leave_cc_emails",
     "send_leave_request_email",
     "send_leave_applied_confirmation_email",
     "send_leave_decision_email",

@@ -60,6 +60,7 @@ class LeaveBalanceSummary:
     unpaid_leaves: Decimal
     remaining_paid_leaves: Decimal
     carry_forward_adjustment: Decimal
+    opening_adjustment: Decimal
     base_quota: Decimal
 
     @property
@@ -134,13 +135,13 @@ def _leave_days_within_period(
     """
     Return deductible leave days inside one leave-year period.
 
-    CURRENT PRODUCTION RULES PRESERVED:
-    - Half-day leave does NOT deduct from yearly paid leave balance.
+    BUSINESS RULES:
+    - Half-day leave deducts 0.5 day.
     - Full-day leave deducts each overlapping calendar day.
     - Cross-year leave is split correctly at leave-year boundary.
     """
     if leave.is_half_day:
-        return Decimal("0.0")
+        return Decimal("0.5")
 
     leave_start = leave.start_date
     leave_end = leave.end_date
@@ -167,9 +168,9 @@ def calculate_current_deductible_days_for_period(
     """
     Calculate currently deductible leave days for one employee and one leave year.
 
-    CURRENT PRODUCTION RULES PRESERVED:
-    - PENDING + APPROVED leaves deduct.
-    - Half-day leave deducts 0.
+    BUSINESS RULES:
+    - PENDING + APPROVED leaves deduct immediately.
+    - Half-day leave deducts 0.5.
     - REJECTED / CANCELLED leaves do not deduct.
     """
     active_leaves = (
@@ -232,6 +233,24 @@ def _get_carry_forward_from_db(
         return Decimal("0.0")
 
     except Exception:
+        return Decimal("0.0")
+
+
+
+def _get_opening_adjustment_from_db(
+    employee,
+    leave_year_start: date,
+    leave_year_end: date,
+) -> Decimal:
+    """Read the separately stored opening adjustment for a leave year."""
+    try:
+        balance = EmployeeLeaveBalance.objects.get(
+            employee=employee,
+            leave_year_start=leave_year_start,
+            leave_year_end=leave_year_end,
+        )
+        return getattr(balance, "opening_adjustment", Decimal("0.0")) or Decimal("0.0")
+    except EmployeeLeaveBalance.DoesNotExist:
         return Decimal("0.0")
 
 
@@ -610,7 +629,8 @@ def calculate_leave_balance_for_period(
         leave_year_end,
     )
 
-    effective_quota = ANNUAL_PAID_LEAVE_QUOTA + carry_forward
+    opening_adjustment = _get_opening_adjustment_from_db(employee, leave_year_start, leave_year_end)
+    effective_quota = ANNUAL_PAID_LEAVE_QUOTA + carry_forward + opening_adjustment
     effective_quota = max(effective_quota, Decimal("0.0"))
 
     paid_taken = min(total_taken, effective_quota)
@@ -626,6 +646,7 @@ def calculate_leave_balance_for_period(
         unpaid_leaves=unpaid_leaves,
         remaining_paid_leaves=remaining_paid,
         carry_forward_adjustment=carry_forward,
+        opening_adjustment=opening_adjustment,
         base_quota=ANNUAL_PAID_LEAVE_QUOTA,
     )
 
@@ -636,22 +657,8 @@ def sync_employee_leave_balance(
     leave_year_start: date,
     leave_year_end: date,
 ) -> EmployeeLeaveBalance:
-    """
-    Return the stored yearly balance row without recalculating it from LeaveRequest.
-
-    Production rule for finalized FY balances:
-    EmployeeLeaveBalance is the source of truth after management approval.
-
-    This intentionally does not overwrite:
-    - total_paid_leaves
-    - paid_leaves_taken
-    - unpaid_leaves
-    - remaining_paid_leaves
-    - carry_forward_adjustment
-
-    LeaveRequest history is preserved separately for audit and reporting.
-    """
-    balance, _created = EmployeeLeaveBalance.objects.get_or_create(
+    """Recalculate and store one employee's balance from LeaveRequest evidence."""
+    balance, _created = EmployeeLeaveBalance.objects.select_for_update().get_or_create(
         employee=employee,
         leave_year_start=leave_year_start,
         leave_year_end=leave_year_end,
@@ -661,9 +668,30 @@ def sync_employee_leave_balance(
             "unpaid_leaves": Decimal("0.0"),
             "remaining_paid_leaves": ANNUAL_PAID_LEAVE_QUOTA,
             "carry_forward_adjustment": Decimal("0.0"),
+            "opening_adjustment": Decimal("0.0"),
         },
     )
 
+    total_used = calculate_current_deductible_days_for_period(
+        employee=employee,
+        leave_year_start=leave_year_start,
+        leave_year_end=leave_year_end,
+    )
+    carry_forward = balance.carry_forward_adjustment or Decimal("0.0")
+    opening = balance.opening_adjustment or Decimal("0.0")
+    effective_quota = max(ANNUAL_PAID_LEAVE_QUOTA + carry_forward + opening, Decimal("0.0"))
+    paid_used = min(total_used, effective_quota)
+    unpaid = max(total_used - effective_quota, Decimal("0.0"))
+    available = max(effective_quota - paid_used, Decimal("0.0"))
+
+    balance.total_paid_leaves = effective_quota
+    balance.paid_leaves_taken = paid_used
+    balance.unpaid_leaves = unpaid
+    balance.remaining_paid_leaves = available
+    balance.save(update_fields=[
+        "total_paid_leaves", "paid_leaves_taken", "unpaid_leaves",
+        "remaining_paid_leaves", "updated_at",
+    ])
     return balance
 
 
@@ -673,8 +701,7 @@ def sync_employee_leave_balance_for_range(
     range_end: date | None,
 ) -> List[EmployeeLeaveBalance]:
     """
-    Return stored leave balance rows for every leave year touched by date range.
-    Does not recalculate finalized balances from LeaveRequest.
+    Recalculate and return balance rows for every leave year touched by the range.
     """
     if not range_start or not range_end:
         current_start, current_end = get_leave_year_bounds()
@@ -712,8 +739,7 @@ def get_or_sync_employee_leave_balance(
     target_date: date | None = None,
 ) -> EmployeeLeaveBalance:
     """
-    Return the stored yearly balance row for the leave year containing target_date.
-    Does not recalculate finalized balances from LeaveRequest.
+    Recalculate and return the yearly balance row containing target_date.
     """
     leave_year_start, leave_year_end = get_leave_year_bounds(target_date)
 
@@ -729,10 +755,7 @@ def get_employee_leave_balance_summary(
     target_date: date | None = None,
 ) -> LeaveBalanceSummary:
     """
-    Return stored yearly leave balance for dashboard and approval pages.
-
-    Management-approved EmployeeLeaveBalance rows are the source of truth.
-    Do not recalculate from LeaveRequest on read.
+    Recalculate and return the yearly balance for dashboard and approval pages.
     """
     leave_year_start, leave_year_end = get_leave_year_bounds(target_date)
 
@@ -750,10 +773,8 @@ def get_employee_leave_balance_summary(
         paid_leaves_taken=balance.paid_leaves_taken,
         unpaid_leaves=balance.unpaid_leaves,
         remaining_paid_leaves=balance.remaining_paid_leaves,
-        carry_forward_adjustment=(
-            getattr(balance, "carry_forward_adjustment", Decimal("0.0"))
-            or Decimal("0.0")
-        ),
+        carry_forward_adjustment=(getattr(balance, "carry_forward_adjustment", Decimal("0.0")) or Decimal("0.0")),
+        opening_adjustment=(getattr(balance, "opening_adjustment", Decimal("0.0")) or Decimal("0.0")),
         base_quota=ANNUAL_PAID_LEAVE_QUOTA,
     )
 
@@ -1089,3 +1110,20 @@ def get_employees_on_leave_for_date(check_date: date) -> list:
 
     except Exception:
         return []
+
+@transaction.atomic
+def create_next_year_carry_forward(employee, closing_year_start: date, closing_year_end: date) -> EmployeeLeaveBalance:
+    """Close one FY and apply its final available/overused amount to the next FY."""
+    closing = sync_employee_leave_balance(employee, closing_year_start, closing_year_end)
+    net = closing.remaining_paid_leaves - closing.unpaid_leaves
+    next_start = closing_year_end + timedelta(days=1)
+    next_end = date(next_start.year + 1, 3, 31)
+    next_balance, _ = EmployeeLeaveBalance.objects.select_for_update().get_or_create(
+        employee=employee,
+        leave_year_start=next_start,
+        leave_year_end=next_end,
+        defaults={"carry_forward_adjustment": net, "opening_adjustment": Decimal("0.0")},
+    )
+    next_balance.carry_forward_adjustment = net
+    next_balance.save(update_fields=["carry_forward_adjustment", "updated_at"])
+    return sync_employee_leave_balance(employee, next_start, next_end)

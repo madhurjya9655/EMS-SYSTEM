@@ -87,17 +87,11 @@ def cleanup_expired_handovers(self):
 
 @shared_task(bind=True, max_retries=3, name="leave.send_leave_emails_async")
 def send_leave_emails_async(self, leave_id: int):
-    """
-    Send leave request emails asynchronously.
+    """Send the leave request using Employee-page routing only.
 
-    Production behavior:
-    1. Manager / reporting person receives leave request email with approve/reject links.
-    2. Employee receives separate confirmation email showing available leave balance
-       after application.
-
-    Current leave balance rule preserved:
-    - Pending + Approved full-day leaves reduce paid balance.
-    - Half-day leave displays as 0.5 day but does not reduce paid balance.
+    TO: employee's Reporting Officer
+    CC: employee's Default CC users
+    Employee: receives a separate submission confirmation
     """
     try:
         from .models import LeaveRequest, LeaveDecisionAudit, DecisionAction
@@ -110,61 +104,33 @@ def send_leave_emails_async(self, leave_id: int):
             LeaveRequest.objects.select_related(
                 "employee",
                 "reporting_person",
-                "cc_person",
                 "leave_type",
             )
-            .prefetch_related("cc_users")
             .get(id=leave_id)
         )
 
-        # 1) Employee-selected CCs
-        user_cc_emails = [
-            u.email
-            for u in leave.cc_users.all()
-            if getattr(u, "email", None)
-        ]
-
-        # 2) Admin-managed default CCs via resolver
-        admin_multi_cc: List[str] = []
-        try:
-            _rp, cc_users = LeaveRequest.resolve_routing_multi_for(leave.employee)
-            admin_multi_cc = [
-                u.email
-                for u in cc_users
-                if getattr(u, "email", None)
-            ]
-        except Exception:
-            admin_multi_cc = []
-
-        # 3) Legacy single CC snapshot on leave row
-        legacy_cc = [
-            leave.cc_person.email
-        ] if getattr(leave.cc_person, "email", None) else []
-
-        # Merge and dedupe case-insensitively
-        seen = set()
-        all_cc: List[str] = []
-
-        for e in admin_multi_cc + legacy_cc + user_cc_emails:
-            low = (e or "").strip().lower()
-            if low and low not in seen:
-                seen.add(low)
-                all_cc.append(e)
+        reporting_person, default_cc_users = LeaveRequest.resolve_routing_multi_for(
+            leave.employee
+        )
 
         manager_email = (
-            leave.reporting_person.email
-            if getattr(leave.reporting_person, "email", None)
+            reporting_person.email
+            if reporting_person and getattr(reporting_person, "email", None)
             else None
         )
 
-        # Manager / RP email with approval links.
+        default_cc_emails = [
+            user.email
+            for user in default_cc_users
+            if getattr(user, "email", None)
+        ]
+
         send_leave_request_email(
             leave,
             manager_email=manager_email,
-            cc_list=all_cc,
+            cc_list=default_cc_emails,
         )
 
-        # Employee confirmation email with available balance after application.
         send_leave_applied_confirmation_email(leave)
 
         if LeaveDecisionAudit and DecisionAction:
@@ -175,11 +141,11 @@ def send_leave_emails_async(self, leave_id: int):
             )
 
         logger.info(
-            "Sent leave request + employee confirmation emails for leave #%s",
+            "Sent leave request to reporting officer and confirmation to employee for leave #%s",
             leave_id,
         )
 
-        return f"Sent leave request + employee confirmation emails for leave {leave_id}"
+        return f"Sent leave emails for leave {leave_id}"
 
     except Exception as exc:
         logger.error("Error sending leave emails for #%s: %s", leave_id, exc)

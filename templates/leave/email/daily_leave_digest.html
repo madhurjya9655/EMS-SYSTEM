@@ -1,44 +1,99 @@
 <!doctype html>
-<html>
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Daily Leave Digest</title>
+  <meta name="color-scheme" content="light only">
+  <title>Employees on Leave Today</title>
 </head>
-<body style="margin:0;background:#eef3f9;font-family:Arial,Helvetica,sans-serif;color:#14213d;">
-  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#eef3f9;padding:24px 12px;">
-    <tr><td align="center">
-      <table role="presentation" width="750" cellspacing="0" cellpadding="0" style="width:100%;max-width:750px;background:#f4f7fb;">
-        <tr>
-          <td style="background:#2f89cb;padding:48px 40px 52px;color:#fff;">
-            <table width="100%" role="presentation"><tr>
-              <td style="font-size:15px;letter-spacing:1.5px;text-transform:uppercase;">Daily Digest</td>
-              <td align="right" style="font-size:15px;letter-spacing:1.5px;text-transform:uppercase;">{{ digest_date|date:"l, d M" }}</td>
-            </tr></table>
-            <div style="font-size:38px;line-height:1.2;text-align:center;margin-top:32px;">Employees On Leave</div>
-          </td>
-        </tr>
-        <tr><td style="padding:26px 40px 38px;">
-          <div style="background:#fff;border-radius:16px;padding:28px 30px;">
-            <div style="font-size:23px;margin-bottom:24px;">On Leave</div>
-            {% for leave in leaves %}
-              <table width="100%" role="presentation" style="margin:0 0 18px;border-bottom:1px solid #edf1f5;padding-bottom:18px;"><tr>
-                <td width="54" valign="top">
-                  <div style="width:48px;height:48px;border-radius:50%;background:#edf6fb;text-align:center;line-height:48px;font-size:16px;color:#10243e;">
-                    {{ leave.employee.first_name|default:leave.employee.username|slice:":1"|upper }}{{ leave.employee.last_name|slice:":1"|upper }}
-                  </div>
-                </td>
-                <td valign="top" style="padding-left:12px;">
-                  <div style="font-size:15px;font-weight:600;text-transform:uppercase;">{{ leave.employee.get_full_name|default:leave.employee.username }}</div>
-                  <div style="font-size:13px;margin-top:6px;">{{ leave.start_date|date:"d M, Y" }} - {{ leave.end_date|date:"d M, Y" }}</div>
-                  <div style="font-size:12px;color:#6b7280;margin-top:5px;">{{ leave.leave_type.name }} · {% if leave.is_half_day %}Half Day{% else %}Full Day{% endif %} · {{ leave.get_status_display }}</div>
-                </td>
-              </tr></table>
-            {% endfor %}
-          </div>
-        </td></tr>
-      </table>
-    </td></tr>
+<body style="margin:0;padding:0;background:#eef3f9;font-family:Arial,Helvetica,sans-serif;color:#14213d;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%;background:#eef3f9;">
+    <tr>
+      <td align="center" style="padding:24px 12px;">
+        <table role="presentation" width="720" cellspacing="0" cellpadding="0" border="0" style="width:100%;max-width:720px;background:#ffffff;border:1px solid #dfe7f1;border-radius:16px;overflow:hidden;">
+          <tr>
+            <td style="background:#2563eb;padding:34px 36px;color:#ffffff;">
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
+                <tr>
+                  <td style="font-size:13px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase;">BOS Lakshya</td>
+                  <td align="right" style="font-size:13px;">{{ digest_date|date:"l, d M Y" }}</td>
+                </tr>
+              </table>
+              <div style="font-size:30px;line-height:1.25;font-weight:700;text-align:center;margin-top:28px;">Employees on Leave Today</div>
+              <div style="font-size:14px;line-height:1.5;text-align:center;margin-top:8px;opacity:.9;">Daily availability update for all employees</div>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding:28px 30px 12px;">
+              <div style="font-size:19px;font-weight:700;color:#111827;margin-bottom:14px;">Full Day</div>
+
+              {% for leave in leaves %}
+                {% if not leave.is_half_day %}
+                <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border:1px solid #e5e7eb;border-radius:12px;margin-bottom:12px;">
+                  <tr>
+                    <td width="58" valign="middle" style="padding:14px 0 14px 14px;">
+                      <div style="width:44px;height:44px;line-height:44px;border-radius:50%;background:#eff6ff;color:#1d4ed8;text-align:center;font-size:15px;font-weight:700;">
+                        {{ leave.employee.first_name|default:leave.employee.username|slice:":1"|upper }}{{ leave.employee.last_name|slice:":1"|upper }}
+                      </div>
+                    </td>
+                    <td valign="middle" style="padding:14px;">
+                      <div style="font-size:15px;font-weight:700;color:#111827;">{{ leave.employee.get_full_name|default:leave.employee.username }}</div>
+                      <div style="font-size:12px;color:#6b7280;margin-top:5px;">{{ leave.leave_type.name }} &bull; {{ leave.start_date|date:"d M Y" }}{% if leave.end_date != leave.start_date %} to {{ leave.end_date|date:"d M Y" }}{% endif %}</div>
+                    </td>
+                    <td align="right" valign="middle" style="padding:14px;">
+                      <span style="display:inline-block;padding:5px 10px;border-radius:999px;background:#dcfce7;color:#166534;font-size:11px;font-weight:700;">Full Day</span>
+                    </td>
+                  </tr>
+                </table>
+                {% endif %}
+              {% endfor %}
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding:12px 30px 20px;">
+              <div style="font-size:19px;font-weight:700;color:#111827;margin-bottom:14px;">Half Day</div>
+
+              {% for leave in leaves %}
+                {% if leave.is_half_day %}
+                <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border:1px solid #e5e7eb;border-radius:12px;margin-bottom:12px;">
+                  <tr>
+                    <td width="58" valign="middle" style="padding:14px 0 14px 14px;">
+                      <div style="width:44px;height:44px;line-height:44px;border-radius:50%;background:#fff7ed;color:#c2410c;text-align:center;font-size:15px;font-weight:700;">
+                        {{ leave.employee.first_name|default:leave.employee.username|slice:":1"|upper }}{{ leave.employee.last_name|slice:":1"|upper }}
+                      </div>
+                    </td>
+                    <td valign="middle" style="padding:14px;">
+                      <div style="font-size:15px;font-weight:700;color:#111827;">{{ leave.employee.get_full_name|default:leave.employee.username }}</div>
+                      <div style="font-size:12px;color:#6b7280;margin-top:5px;">{{ leave.leave_type.name }} &bull; {{ leave.start_date|date:"d M Y" }}</div>
+                    </td>
+                    <td align="right" valign="middle" style="padding:14px;">
+                      <span style="display:inline-block;padding:5px 10px;border-radius:999px;background:#ffedd5;color:#9a3412;font-size:11px;font-weight:700;">Half Day</span>
+                    </td>
+                  </tr>
+                </table>
+                {% endif %}
+              {% endfor %}
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding:0 30px 30px;">
+              <div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:10px;padding:14px 16px;color:#64748b;font-size:12px;line-height:1.6;">
+                This email includes leave requests that are currently Pending or Approved and cover today. It is sent automatically by BOS Lakshya.
+              </div>
+            </td>
+          </tr>
+
+          <tr>
+            <td align="center" style="background:#f8fafc;border-top:1px solid #e5e7eb;padding:18px 24px;color:#94a3b8;font-size:11px;">
+              BOS Lakshya ERP &bull; Daily Leave Notification
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
   </table>
 </body>
 </html>

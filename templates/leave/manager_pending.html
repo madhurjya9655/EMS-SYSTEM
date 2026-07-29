@@ -1,102 +1,111 @@
 {% extends "base.html" %}
-{% load static permission_tags %}
+{% load static tz permission_tags %}
 
 {% block title %}Pending Leaves — Manager{% endblock %}
+{% block navbar_title %}Pending Leaves{% endblock %}
+{% block breadcrumb %}Leave / Manager Approvals{% endblock %}
+{% block page_title %}Pending Leaves{% endblock %}
+
+{% block page_actions %}
+  <a class="btn btn-light" href="{% url 'leave:dashboard' %}">
+    <i class="fa-solid fa-arrow-left me-1"></i>My Dashboard
+  </a>
+{% endblock %}
 
 {% block content %}
-<div class="container-fluid py-3">
-
+<div class="container-fluid px-0">
   {% if messages %}
     {% for message in messages %}
-      <div class="alert alert-{% if message.tags %}{{ message.tags }}{% else %}info{% endif %} py-2">{{ message }}</div>
+      <div class="alert alert-{{ message.tags|default:'info' }} alert-dismissible fade show" role="alert">
+        {{ message }}
+        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+      </div>
     {% endfor %}
   {% endif %}
 
-  <div class="d-flex align-items-center justify-content-between mb-3">
-    <h3 class="mb-0">Pending Leaves</h3>
-    <div class="d-flex gap-2">
-      <a class="btn btn-outline-secondary btn-sm" href="{% url 'leave:dashboard' %}">My Dashboard</a>
+  <div class="card shadow-sm border-0">
+    <div class="card-header bg-white py-3 d-flex align-items-center justify-content-between flex-wrap gap-2">
+      <div>
+        <h5 class="mb-1">
+          <i class="fa-solid fa-hourglass-half text-warning me-2"></i>Requests Waiting for Your Decision
+        </h5>
+        <div class="text-muted small">Leave is already reserved from the employee balance while the request is pending.</div>
+      </div>
+      <span class="badge rounded-pill text-bg-warning px-3 py-2">{{ leaves|length }} Pending</span>
     </div>
-  </div>
 
-  <div class="card">
-    <div class="card-body">
+    <div class="card-body p-0">
       {% if leaves %}
         <div class="table-responsive">
-          <table class="table table-sm align-middle table-hover">
+          <table class="table table-hover align-middle mb-0">
             <thead class="table-light">
               <tr>
-                <th>#</th>
+                <th>Request</th>
                 <th>Employee</th>
-                <th>Type</th>
-                <th class="text-nowrap">Start (IST)</th>
-                <th class="text-nowrap">End (IST)</th>
-                <th class="text-center">Half-day</th>
+                <th>Leave</th>
+                <th>Period</th>
+                <th class="text-center">Days</th>
                 <th>Reason</th>
-                <th class="text-nowrap" style="min-width:220px;">Comment (optional)</th>
+                <th style="min-width:210px;">Decision Note</th>
                 <th class="text-end">Actions</th>
               </tr>
             </thead>
             <tbody>
               {% for lr in leaves %}
                 <tr>
-                  <td class="text-muted">#{{ lr.id }}</td>
+                  <td class="text-muted fw-semibold">#{{ lr.id }}</td>
                   <td>
                     <div class="fw-semibold">{{ lr.employee.get_full_name|default:lr.employee.username }}</div>
-                    <div class="small text-muted">{{ lr.employee.email }}</div>
+                    <div class="small text-muted">{{ lr.employee.email|default:"—" }}</div>
                   </td>
-                  <td class="text-nowrap">{{ lr.leave_type.name }}</td>
-                  <td class="text-nowrap">{{ lr.start_at|date:"Y-m-d H:i" }}</td>
-                  <td class="text-nowrap">{{ lr.end_at|date:"Y-m-d H:i" }}</td>
-                  <td class="text-center">
-                    {% if lr.is_half_day %}
-                      <span class="badge bg-info text-dark">Yes</span>
-                    {% else %}
-                      <span class="badge bg-secondary">No</span>
-                    {% endif %}
-                  </td>
-                  <td style="max-width:360px;">
-                    {% if lr.reason %}
-                      <span class="d-inline-block text-truncate" style="max-width:340px;" title="{{ lr.reason }}">{{ lr.reason }}</span>
-                    {% else %}
-                      <span class="text-muted">—</span>
-                    {% endif %}
-                    {% if lr.attachment %}
-                      <div class="small mt-1">
-                        <a href="{{ lr.attachment.url }}" target="_blank" rel="noopener" class="link-secondary">Attachment</a>
-                      </div>
-                    {% endif %}
-                  </td>
-
-                  {# Per-row comment inputs bound to each form via form="" #}
                   <td>
-                    <input form="approve-{{ lr.id }}" class="form-control form-control-sm mb-1"
-                           type="text" name="decision_comment" placeholder="Add note (optional)">
-                    <input form="reject-{{ lr.id }}" class="form-control form-control-sm"
-                           type="text" name="decision_comment" placeholder="Add note (optional)">
+                    <div class="fw-semibold">{{ lr.leave_type.name }}</div>
+                    {% if lr.is_half_day %}
+                      <span class="badge rounded-pill bg-warning-subtle text-warning-emphasis border border-warning-subtle mt-1">Half Day</span>
+                    {% else %}
+                      <span class="badge rounded-pill bg-success-subtle text-success-emphasis border border-success-subtle mt-1">Full Day</span>
+                    {% endif %}
                   </td>
-
-                  <td class="text-end">
-                    <a class="btn btn-outline-primary btn-sm me-1"
-                       href="{% url 'leave:approval_page' lr.id %}?next={{ request.get_full_path|urlencode }}">
-                      Open
+                  <td class="text-nowrap">
+                    {% timezone "Asia/Kolkata" %}
+                      <div>{{ lr.start_at|date:"d M Y" }} <span class="text-muted">{{ lr.start_at|date:"g:i A" }}</span></div>
+                      <div class="small text-muted">to {{ lr.end_at|date:"d M Y" }} {{ lr.end_at|date:"g:i A" }}</div>
+                    {% endtimezone %}
+                  </td>
+                  <td class="text-center">
+                    <span class="badge text-bg-light border fs-6">{{ lr.blocked_days|floatformat:"-1" }}</span>
+                  </td>
+                  <td style="max-width:300px;">
+                    <div class="text-truncate" style="max-width:280px;" title="{{ lr.reason|striptags }}">{{ lr.reason|default:"—" }}</div>
+                    {% if lr.attachment %}
+                      <a href="{{ lr.attachment.url }}" target="_blank" rel="noopener" class="small text-decoration-none d-inline-block mt-1">
+                        <i class="fa-solid fa-paperclip me-1"></i>View attachment
+                      </a>
+                    {% endif %}
+                  </td>
+                  <td>
+                    <input form="approve-{{ lr.id }}" class="form-control form-control-sm mb-2" type="text" name="decision_comment" maxlength="500" placeholder="Approval note (optional)">
+                    <input form="reject-{{ lr.id }}" class="form-control form-control-sm" type="text" name="decision_comment" maxlength="500" placeholder="Rejection reason">
+                  </td>
+                  <td class="text-end text-nowrap">
+                    <a class="btn btn-sm btn-outline-primary mb-1" href="{% url 'leave:approval_page' lr.id %}?next={{ request.get_full_path|urlencode }}" title="Open request">
+                      <i class="fa-solid fa-eye"></i>
                     </a>
 
-                    <form id="approve-{{ lr.id }}" method="post"
-                          action="{% url 'leave:manager_decide_approve' lr.id %}?next={{ request.get_full_path|urlencode }}"
-                          style="display:inline;">
+                    <form id="approve-{{ lr.id }}" method="post" action="{% url 'leave:manager_decide_approve' lr.id %}?next={{ request.get_full_path|urlencode }}" class="d-inline" onsubmit="return confirm('Approve Leave #{{ lr.id }}? The leave is already deducted and will remain deducted.');">
                       {% csrf_token %}
-                      <button class="btn btn-success btn-sm" type="submit">Approve</button>
+                      <button class="btn btn-sm btn-success mb-1" type="submit" title="Approve">
+                        <i class="fa-solid fa-check"></i>
+                      </button>
                     </form>
 
-                    <form id="reject-{{ lr.id }}" method="post"
-                          action="{% url 'leave:manager_decide_reject' lr.id %}?next={{ request.get_full_path|urlencode }}"
-                          style="display:inline;">
+                    <form id="reject-{{ lr.id }}" method="post" action="{% url 'leave:manager_decide_reject' lr.id %}?next={{ request.get_full_path|urlencode }}" class="d-inline" onsubmit="return confirm('Reject Leave #{{ lr.id }}? The reserved leave balance will be restored.');">
                       {% csrf_token %}
-                      <button class="btn btn-danger btn-sm" type="submit">Reject</button>
+                      <button class="btn btn-sm btn-danger mb-1" type="submit" title="Reject">
+                        <i class="fa-solid fa-xmark"></i>
+                      </button>
                     </form>
 
-                    {# Admin Edit button (per-row) #}
                     {% include "leave/_admin_edit_button.html" with leave=lr next_url=request.get_full_path %}
                   </td>
                 </tr>
@@ -105,9 +114,20 @@
           </table>
         </div>
       {% else %}
-        <div class="text-center text-muted py-4">No pending leaves assigned to you.</div>
+        <div class="text-center py-5 px-3">
+          <div class="mb-3 text-success"><i class="fa-regular fa-circle-check fa-3x"></i></div>
+          <div class="fw-semibold fs-5">No pending leave requests</div>
+          <div class="text-muted mt-1">There is nothing waiting for your approval.</div>
+        </div>
       {% endif %}
     </div>
+
+    {% if leaves %}
+      <div class="card-footer bg-white small text-muted py-3">
+        <i class="fa-solid fa-circle-info me-1"></i>
+        Approving does not deduct leave again. Rejecting restores the employee's reserved balance automatically.
+      </div>
+    {% endif %}
   </div>
 </div>
 {% endblock %}

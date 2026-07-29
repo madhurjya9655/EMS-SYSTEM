@@ -301,6 +301,7 @@ def employee_create(request):
             "phone": mobile,
             "department": designation,
             "is_active": user.is_active,
+                    "reporting_officer_id": mapping.reporting_person_id if mapping else None,
         },
     )
 
@@ -341,6 +342,10 @@ def employee_create(request):
             id=int(reporting_person_id),
             is_active=True,
         ).first()
+
+    if employee.reporting_officer_id != (reporting_person.id if reporting_person else None):
+        employee.reporting_officer = reporting_person
+        employee.save(update_fields=["reporting_officer"])
 
     # ------------------------------------------------------------------
     # CC resolution from Employee page form

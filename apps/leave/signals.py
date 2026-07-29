@@ -24,7 +24,7 @@ from django.apps import apps as django_apps
 from django.contrib.auth import get_user_model
 from django.db import transaction
 from django.db.models import Q
-from django.db.models.signals import post_save, pre_delete, pre_save
+from django.db.models.signals import m2m_changed, post_save, pre_delete, pre_save
 from django.dispatch import Signal, receiver
 from django.utils import timezone
 
@@ -156,40 +156,37 @@ def _collect_admin_cc_emails(employee) -> List[str]:
 
 
 def _safe_send_request_email_and_audit(leave: LeaveRequest) -> None:
-    """
-    Send leave request email and write EMAIL_SENT(kind='request') audit.
+    """Send request email using Reporting Officer and Default CC only.
 
-    Runs after database commit.
+    Runs after database commit. Global Leave Email Settings and employee-selected
+    CC fields are intentionally ignored.
     """
     try:
         from .models import DecisionAction, LeaveDecisionAudit
         from apps.leave.services.notifications import send_leave_request_email
 
+        reporting_person, default_cc_users = LeaveRequest.resolve_routing_multi_for(
+            leave.employee
+        )
+
         manager_email = (
-            leave.reporting_person.email
-            if leave.reporting_person and getattr(leave.reporting_person, "email", None)
+            reporting_person.email
+            if reporting_person and getattr(reporting_person, "email", None)
             else None
         )
 
-        admin_cc_list = _collect_admin_cc_emails(leave.employee)
-
-        extra_cc_emails: List[str] = []
-
-        try:
-            extra_cc_emails = [
-                u.email
-                for u in leave.cc_users.all()
-                if getattr(u, "email", None)
+        default_cc_emails = _dedupe_emails_preserve_order(
+            [
+                user.email
+                for user in default_cc_users
+                if getattr(user, "email", None)
             ]
-        except Exception:
-            extra_cc_emails = []
-
-        all_cc = _dedupe_emails_preserve_order(admin_cc_list + extra_cc_emails)
+        )
 
         send_leave_request_email(
             leave,
             manager_email=manager_email,
-            cc_list=all_cc,
+            cc_list=default_cc_emails,
         )
 
         try:
@@ -865,7 +862,7 @@ if not logging._leave_signals_bound:  # type: ignore[attr-defined]
                         getattr(lr, "id", None),
                     )
 
-        if status_changed and lr.status == LeaveStatus.REJECTED:
+        if status_changed and lr.status in {LeaveStatus.REJECTED, LeaveStatus.CANCELLED}:
             try:
                 leave_unblocked.send(
                     sender=LeaveRequest,
@@ -914,51 +911,82 @@ if not logging._leave_signals_bound:  # type: ignore[attr-defined]
     # When Admin edits ApproverMapping:
     # retarget PENDING leaves and resend request email.
     # ---------------------------------------------------------------------
-    @receiver(post_save, sender=ApproverMapping)
-    def _on_mapping_changed(sender, instance: ApproverMapping, created: bool, **kwargs):
+    # ---------------------------------------------------------------------
+    # When Admin edits Reporting Officer or Default CC on Employee page:
+    # update pending requests and resend to the new routing.
+    # ---------------------------------------------------------------------
+    def _reroute_pending_leaves_for_mapping(mapping: ApproverMapping) -> None:
         try:
-            new_rp = instance.reporting_person
-            new_cc = instance.cc_person
+            reporting_person, default_cc_users = ApproverMapping.resolve_multi_for(
+                mapping.employee
+            )
+            default_cc_emails = [
+                user.email
+                for user in default_cc_users
+                if getattr(user, "email", None)
+            ]
 
             pending = LeaveRequest.objects.filter(
-                employee=instance.employee,
+                employee=mapping.employee,
                 status=LeaveStatus.PENDING,
             )
 
-            to_update = pending.filter(
-                ~Q(reporting_person=new_rp) | ~Q(cc_person=new_cc)
-            )
-
-            if not to_update.exists():
-                return
-
             from apps.leave.services.notifications import send_leave_request_email
 
-            for lr in to_update:
-                lr.reporting_person = new_rp
-                lr.cc_person = new_cc
+            for lr in pending:
+                changed_fields = []
 
-                lr.save(
-                    update_fields=[
-                        "reporting_person",
-                        "cc_person",
-                        "updated_at",
-                    ]
-                )
+                new_rp_id = getattr(reporting_person, "id", None)
+                first_cc = default_cc_users[0] if default_cc_users else None
+                new_cc_id = getattr(first_cc, "id", None)
+
+                if lr.reporting_person_id != new_rp_id:
+                    lr.reporting_person = reporting_person
+                    changed_fields.append("reporting_person")
+
+                if lr.cc_person_id != new_cc_id:
+                    lr.cc_person = first_cc
+                    changed_fields.append("cc_person")
+
+                if changed_fields:
+                    changed_fields.append("updated_at")
+                    lr.save(update_fields=changed_fields)
 
                 send_leave_request_email(
                     lr,
-                    manager_email=(new_rp.email or None) if new_rp else None,
-                    cc_list=[new_cc.email] if getattr(new_cc, "email", None) else [],
+                    manager_email=(
+                        reporting_person.email
+                        if reporting_person and getattr(reporting_person, "email", None)
+                        else None
+                    ),
+                    cc_list=default_cc_emails,
                     force=True,
                 )
 
                 logger.info(
-                    "Rerouted and resent leave %s to %s cc=%s after ApproverMapping change.",
+                    "Rerouted pending leave %s after Employee mapping update: to=%s cc=%s",
                     getattr(lr, "id", None),
-                    getattr(new_rp, "email", "-"),
-                    getattr(new_cc, "email", "-"),
+                    getattr(reporting_person, "email", "-"),
+                    default_cc_emails,
                 )
 
         except Exception:
-            logger.exception("Failed handling ApproverMapping change.")
+            logger.exception("Failed handling employee leave-routing change.")
+
+    @receiver(post_save, sender=ApproverMapping)
+    def _on_mapping_changed(sender, instance: ApproverMapping, created: bool, **kwargs):
+        def _after_commit():
+            _reroute_pending_leaves_for_mapping(instance)
+
+        transaction.on_commit(_after_commit)
+
+    @receiver(m2m_changed, sender=ApproverMapping.default_cc_users.through)
+    def _on_default_cc_changed(sender, instance: ApproverMapping, action: str, **kwargs):
+        if action not in {"post_add", "post_remove", "post_clear"}:
+            return
+
+        def _after_commit():
+            _reroute_pending_leaves_for_mapping(instance)
+
+        transaction.on_commit(_after_commit)
+

@@ -6,8 +6,7 @@
 # CURRENT BUSINESS RULES PRESERVED:
 #   1. Leave deduction happens on apply.
 #      Meaning: PENDING + APPROVED leaves are counted as deducted.
-#   2. Half-day leave does NOT deduct from yearly paid leave quota.
-#      Meaning: half-day blocked_days may show 0.5, but yearly balance deduction is 0.
+#   2. Half-day leave deducts 0.5 from yearly paid leave quota.
 #   3. REJECTED and CANCELLED leaves do not deduct balance.
 #   4. Existing EmployeeLeaveBalance architecture is preserved.
 #   5. Finalized master opening balance will be applied through carry_forward_adjustment.
@@ -269,13 +268,12 @@ class CCConfiguration(models.Model):
 
 
 class LeaveEmailSettings(models.Model):
-    """Singleton, admin-managed global TO and CC configuration for Leave emails.
+    """Deprecated legacy model.
 
-    The existing workflow recipient is always preserved. Users selected in
-    ``to_users`` are added as additional TO recipients, while ``cc_users`` are
-    added as CC recipients. This allows multiple administrators/HR users to be
-    included without replacing the employee, manager, assignee, or other
-    workflow-specific recipient.
+    It is kept temporarily so existing production migrations and database rows
+    remain safe. Leave email delivery must not read this model. Reporting
+    Officer and Default CC values from ApproverMapping are the only routing
+    source. The model can be removed later in a separate migration.
     """
 
     to_users = models.ManyToManyField(
@@ -383,6 +381,11 @@ class EmployeeLeaveBalance(models.Model):
     unpaid_leaves = models.DecimalField(max_digits=6, decimal_places=1, default=0)
     remaining_paid_leaves = models.DecimalField(max_digits=6, decimal_places=1, default=24)
 
+    opening_adjustment = models.DecimalField(
+        max_digits=6, decimal_places=1, default=0,
+        help_text="Manual opening adjustment, kept separate from carry forward.",
+    )
+
     carry_forward_adjustment = models.DecimalField(
         max_digits=5,
         decimal_places=1,
@@ -480,9 +483,9 @@ class EmployeeLeaveBalance(models.Model):
         It only updates this balance row in the format expected by the current
         sync logic.
 
-        Current production behavior preserved:
+        Current production behavior:
         - PENDING + APPROVED leaves deduct
-        - Half-day deducts 0 from yearly quota
+        - Half-day deducts 0.5 from yearly quota
         """
         if base_quota is None:
             base_quota = Decimal("24.0")
@@ -564,7 +567,7 @@ class LeaveRequest(models.Model):
         settings.AUTH_USER_MODEL,
         related_name="leave_requests_cc_user",
         blank=True,
-        help_text="Additional CC recipients selected by employee.",
+        help_text="Legacy field. Employee-selected CC is ignored for leave email routing.",
     )
 
     leave_type = models.ForeignKey(
@@ -692,10 +695,16 @@ class LeaveRequest(models.Model):
 
     @staticmethod
     def resolve_routing_for(user: UserType) -> Tuple[Optional[UserType], Optional[UserType]]:
+        """Return Reporting Officer and first Default CC from ApproverMapping.
+
+        The Employee page maintains ApproverMapping, so no second reporting
+        manager source is used here.
+        """
         return ApproverMapping.resolve_for(user)
 
     @staticmethod
     def resolve_routing_multi_for(user: UserType) -> Tuple[Optional[UserType], List[UserType]]:
+        """Return Reporting Officer and all Default CC users."""
         return ApproverMapping.resolve_multi_for(user)
 
     def _snapshot_employee_details(self) -> None:
@@ -914,14 +923,10 @@ class LeaveRequest(models.Model):
 
     def cancel(self, by_user: Optional[UserType] = None, comment: str = "") -> None:
         """
-        Cancel a pending or approved leave.
-
-        Existing behavior preserved:
-        - Pending/approved leave is no longer counted after cancellation.
-        - Balance sync signals recalculate.
+        Employee self-cancellation is allowed only while leave is pending.
         """
-        if self.status not in (LeaveStatus.PENDING, LeaveStatus.APPROVED):
-            raise ValidationError("Only pending or approved requests can be cancelled.")
+        if self.status != LeaveStatus.PENDING:
+            raise ValidationError("Only pending leave can be cancelled by the employee.")
 
         with transaction.atomic():
             self.status = LeaveStatus.CANCELLED
@@ -1528,35 +1533,28 @@ def _collect_admin_cc_emails(employee: UserType) -> List[str]:
 
 
 def _safe_send_request_email(leave: LeaveRequest) -> None:
+    """Send the request only to Reporting Officer and Default CC users."""
     try:
         from apps.leave.services.notifications import send_leave_request_email
 
+        reporting_person, cc_users = LeaveRequest.resolve_routing_multi_for(leave.employee)
+
         manager_email = (
-            leave.reporting_person.email
-            if leave.reporting_person and leave.reporting_person.email
+            reporting_person.email
+            if reporting_person and getattr(reporting_person, "email", None)
             else None
         )
 
-        admin_cc_list = _collect_admin_cc_emails(leave.employee)
-
-        extra_cc_emails = [
+        default_cc_emails = [
             user.email
-            for user in leave.cc_users.all()
+            for user in cc_users
             if getattr(user, "email", None)
         ]
-
-        all_cc = _dedupe_emails_preserve_order(admin_cc_list + extra_cc_emails)
 
         send_leave_request_email(
             leave,
             manager_email=manager_email,
-            cc_list=all_cc,
-        )
-
-        LeaveDecisionAudit.log(
-            leave,
-            DecisionAction.EMAIL_SENT,
-            kind="request",
+            cc_list=default_cc_emails,
         )
 
     except Exception:
@@ -1704,36 +1702,16 @@ def _dedupe_balance_specs(specs: List[Tuple[int, date, date]]) -> List[Tuple[int
 
 
 def _run_leave_balance_sync(specs: List[Tuple[int, date, date]]) -> None:
-    """
-    Finalized leave balance protection.
-
-    Earlier behavior:
-        LeaveRequest save/delete triggered recalculation of EmployeeLeaveBalance
-        from live leave records.
-
-    New production behavior:
-        Management-approved EmployeeLeaveBalance rows are the source of truth.
-        LeaveRequest records must not overwrite finalized balance rows.
-
-    This keeps:
-        - LeaveRequest history
-        - approval workflow
-        - task blocking
-        - handover logic
-
-    But stops:
-        - automatic balance overwrite
-        - dashboard mismatch after Excel import
-    """
+    """Recalculate affected FY rows after every leave create/update/delete."""
     if not specs:
         return
-
-    logger.info(
-        "Leave balance auto-sync skipped. EmployeeLeaveBalance is finalized source of truth. specs=%s",
-        specs,
-    )
-
-    return
+    from .utils import sync_employee_leave_balance_for_range
+    for employee_id, start_date, end_date in _dedupe_balance_specs(specs):
+        try:
+            employee = User.objects.get(pk=employee_id)
+            sync_employee_leave_balance_for_range(employee, start_date, end_date)
+        except Exception:
+            logger.exception("Leave balance sync failed for employee=%s range=%s..%s", employee_id, start_date, end_date)
 
 
 @receiver(pre_save, sender=LeaveRequest)

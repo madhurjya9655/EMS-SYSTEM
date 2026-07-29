@@ -1,3 +1,4 @@
+#apps\leave\services\daily_digest.py
 from __future__ import annotations
 
 import logging
@@ -24,14 +25,8 @@ def _today_ist() -> date:
 
 def _recipient_emails() -> List[str]:
     User = get_user_model()
-    seen = set()
-    result: List[str] = []
-    for email in (
-        User.objects.filter(is_active=True)
-        .exclude(email__isnull=True)
-        .exclude(email__exact="")
-        .values_list("email", flat=True)
-    ):
+    seen, result = set(), []
+    for email in User.objects.filter(is_active=True).exclude(email__isnull=True).exclude(email="").values_list("email", flat=True):
         normalized = (email or "").strip().lower()
         if normalized and normalized not in seen:
             seen.add(normalized)
@@ -53,38 +48,23 @@ def current_on_leave_rows(target_date: date | None = None):
 
 
 def send_daily_leave_digest_email(target_date: date | None = None) -> int:
-    """Send one BCC digest to all active employees only when leave rows exist."""
     target_date = target_date or _today_ist()
     leaves = current_on_leave_rows(target_date)
     if not leaves:
         logger.info("Daily leave digest skipped for %s: nobody is on leave.", target_date)
         return 0
-
     recipients = _recipient_emails()
     if not recipients:
-        logger.warning("Daily leave digest skipped: no active employee email addresses.")
         return 0
-
-    context = {
-        "digest_date": target_date,
-        "leaves": leaves,
-        "leave_count": len(leaves),
-    }
+    context = {"digest_date": target_date, "leaves": leaves, "leave_count": len(leaves)}
     html_body = render_to_string("leave/email/daily_leave_digest.html", context)
     text_body = render_to_string("leave/email/daily_leave_digest.txt", context)
     if not text_body.strip():
         text_body = strip_tags(html_body)
-
-    from_email = (
-        getattr(settings, "LEAVE_EMAIL_FROM", None)
-        or getattr(settings, "DEFAULT_FROM_EMAIL", None)
-        or getattr(settings, "EMAIL_HOST_USER", None)
-    )
-    subject = f"Daily Digest - Employees on Leave - {target_date:%d %b %Y}"
-
+    from_email = getattr(settings, "LEAVE_EMAIL_FROM", None) or getattr(settings, "DEFAULT_FROM_EMAIL", None) or getattr(settings, "EMAIL_HOST_USER", None)
     with get_connection() as connection:
         message = EmailMultiAlternatives(
-            subject=subject,
+            subject=f"Employees on Leave Today - {target_date:%d %b %Y}",
             body=text_body,
             from_email=from_email,
             to=[from_email] if from_email else [],
@@ -92,12 +72,4 @@ def send_daily_leave_digest_email(target_date: date | None = None) -> int:
             connection=connection,
         )
         message.attach_alternative(html_body, "text/html")
-        sent = message.send(fail_silently=False)
-
-    logger.info(
-        "Daily leave digest sent for %s to %s recipients with %s leave rows.",
-        target_date,
-        len(recipients),
-        len(leaves),
-    )
-    return int(sent)
+        return int(message.send(fail_silently=False))

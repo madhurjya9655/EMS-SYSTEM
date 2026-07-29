@@ -1,109 +1,146 @@
 {% comment %}
-  Reusable partial — include with:
-    {% include "leave/profile_leave_balance.html" with annual_leave_balance=annual_leave_balance %}
+Reusable leave-balance card.
 
-  Requires:
-    annual_leave_balance — LeaveBalanceSummary dataclass instance
+Expected context:
+    annual_leave_balance: LeaveBalanceSummary
 
-  CURRENT PRODUCTION RULE:
-    - PENDING + APPROVED full-day leaves reduce paid balance.
-    - Half-day leaves display as 0.5 day in leave history but do NOT reduce yearly paid quota.
-    - REJECTED / CANCELLED leaves do not reduce paid balance.
-    - Final balance comes from EmployeeLeaveBalance calculation.
+Business rules shown here:
+    - Financial year is 1 April to 31 March.
+    - Effective quota = base quota + carry forward + opening adjustment.
+    - Pending and approved leave reduce balance immediately.
+    - Half day reduces balance by 0.5 day.
+    - Rejected and cancelled leave do not reduce balance.
 {% endcomment %}
 
 {% if annual_leave_balance %}
-<div class="card shadow-sm mb-4 border-0">
+<div class="card shadow-sm mb-4 border-0 leave-balance-card">
   <div class="card-header bg-white py-3 d-flex align-items-center justify-content-between flex-wrap gap-2">
-    <h5 class="mb-0">
-      <i class="fa-solid fa-calendar-check me-2 text-primary"></i>Leave Balance
-    </h5>
-    <span class="text-muted small">{{ annual_leave_balance.leave_year_label }}</span>
+    <div>
+      <h5 class="mb-1">
+        <i class="fa-solid fa-calendar-check me-2 text-primary"></i>Leave Balance
+      </h5>
+      <div class="text-muted small">All values are for the selected financial year.</div>
+    </div>
+    <span class="badge rounded-pill text-bg-light border px-3 py-2">
+      <i class="fa-regular fa-calendar me-1"></i>
+      {{ annual_leave_balance.leave_year_label }}
+    </span>
   </div>
 
   <div class="card-body">
     <div class="row g-3">
-
-      <div class="col-6 col-md-3">
-        <div class="border rounded-3 p-3 h-100 text-center">
-          <div class="text-muted small mb-1">Base + CF Leaves</div>
-          <div class="fs-3 fw-bold text-dark">
-            {{ annual_leave_balance.total_paid_leaves }}
-          </div>
-          <div class="text-muted small mt-1">
-            Effective quota
-          </div>
+      <div class="col-6 col-md-4 col-xl-2">
+        <div class="balance-box h-100 text-center">
+          <div class="balance-label">Base Quota</div>
+          <div class="balance-value text-dark">{{ annual_leave_balance.base_quota|default:"24.0" }}</div>
+          <div class="balance-note">Annual paid leave</div>
         </div>
       </div>
 
-      <div class="col-6 col-md-3">
-        <div class="border rounded-3 p-3 h-100 text-center">
-          <div class="text-muted small mb-1">Used Paid Leaves</div>
-          <div class="fs-3 fw-bold {% if annual_leave_balance.paid_leaves_taken > 0 %}text-warning{% else %}text-dark{% endif %}">
+      <div class="col-6 col-md-4 col-xl-2">
+        <div class="balance-box h-100 text-center">
+          <div class="balance-label">Carry Forward</div>
+          <div class="balance-value {% if annual_leave_balance.carry_forward_adjustment < 0 %}text-danger{% elif annual_leave_balance.carry_forward_adjustment > 0 %}text-success{% else %}text-dark{% endif %}">
+            {{ annual_leave_balance.carry_forward_adjustment|default:"0.0" }}
+          </div>
+          <div class="balance-note">Previous year adjustment</div>
+        </div>
+      </div>
+
+      <div class="col-6 col-md-4 col-xl-2">
+        <div class="balance-box h-100 text-center">
+          <div class="balance-label">Opening Adjustment</div>
+          <div class="balance-value {% if annual_leave_balance.opening_adjustment < 0 %}text-danger{% elif annual_leave_balance.opening_adjustment > 0 %}text-success{% else %}text-dark{% endif %}">
+            {{ annual_leave_balance.opening_adjustment|default:"0.0" }}
+          </div>
+          <div class="balance-note">Admin opening correction</div>
+        </div>
+      </div>
+
+      <div class="col-6 col-md-4 col-xl-2">
+        <div class="balance-box h-100 text-center border-primary-subtle bg-primary-subtle bg-opacity-25">
+          <div class="balance-label">Effective Quota</div>
+          <div class="balance-value text-primary">{{ annual_leave_balance.total_paid_leaves }}</div>
+          <div class="balance-note">Base + CF + opening</div>
+        </div>
+      </div>
+
+      <div class="col-6 col-md-4 col-xl-2">
+        <div class="balance-box h-100 text-center">
+          <div class="balance-label">Used Paid Leave</div>
+          <div class="balance-value {% if annual_leave_balance.paid_leaves_taken > 0 %}text-warning{% else %}text-dark{% endif %}">
             {{ annual_leave_balance.paid_leaves_taken }}
           </div>
-          <div class="text-muted small mt-1">
-            Pending + Approved
-          </div>
+          <div class="balance-note">Pending + approved</div>
         </div>
       </div>
 
-      <div class="col-6 col-md-3">
-        <div class="border rounded-3 p-3 h-100 text-center">
-          <div class="text-muted small mb-1">Available Leaves</div>
-          <div class="fs-3 fw-bold {% if annual_leave_balance.remaining_paid_leaves == 0 %}text-danger{% elif annual_leave_balance.remaining_paid_leaves <= 5 %}text-warning{% else %}text-success{% endif %}">
+      <div class="col-6 col-md-4 col-xl-2">
+        <div class="balance-box h-100 text-center">
+          <div class="balance-label">Available Leave</div>
+          <div class="balance-value {% if annual_leave_balance.remaining_paid_leaves <= 0 %}text-danger{% elif annual_leave_balance.remaining_paid_leaves <= 5 %}text-warning{% else %}text-success{% endif %}">
             {{ annual_leave_balance.remaining_paid_leaves }}
           </div>
-          <div class="text-muted small mt-1">
-            Current balance
+          <div class="balance-note">Current paid balance</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="row g-3 mt-0">
+      <div class="col-md-6">
+        <div class="alert alert-light border d-flex align-items-start gap-2 mb-0 h-100">
+          <i class="fa-solid fa-circle-info text-primary mt-1"></i>
+          <div class="small">
+            <strong>Balance rule:</strong>
+            Pending and approved leave reduce the balance immediately.
+            A half day reduces the balance by <strong>0.5 day</strong>.
+            Rejected and cancelled leave do not reduce the balance.
           </div>
         </div>
       </div>
 
-      <div class="col-6 col-md-3">
-        <div class="border rounded-3 p-3 h-100 text-center">
-          <div class="text-muted small mb-1">Unpaid Leaves</div>
-          <div class="fs-3 fw-bold {% if annual_leave_balance.unpaid_leaves > 0 %}text-danger{% else %}text-dark{% endif %}">
-            {{ annual_leave_balance.unpaid_leaves }}
-          </div>
-          <div class="text-muted small mt-1">
-            Beyond paid quota
+      <div class="col-md-6">
+        <div class="alert {% if annual_leave_balance.unpaid_leaves > 0 %}alert-warning{% else %}alert-light border{% endif %} d-flex align-items-start gap-2 mb-0 h-100">
+          <i class="fa-solid fa-triangle-exclamation {% if annual_leave_balance.unpaid_leaves > 0 %}text-warning{% else %}text-muted{% endif %} mt-1"></i>
+          <div class="small">
+            <strong>Unpaid Leave:</strong>
+            <span class="fw-bold {% if annual_leave_balance.unpaid_leaves > 0 %}text-danger{% endif %}">{{ annual_leave_balance.unpaid_leaves }}</span>
+            day(s). Unpaid leave starts only after the available paid balance reaches zero.
           </div>
         </div>
       </div>
-
     </div>
-
-    {% if annual_leave_balance.carry_forward_adjustment and annual_leave_balance.carry_forward_adjustment != 0 %}
-    <div class="alert alert-info d-flex align-items-start gap-2 mt-3 mb-0 py-2 small">
-      <i class="fa-solid fa-circle-info mt-1"></i>
-      <div>
-        <strong>Carry Forward / Opening Adjustment:</strong>
-        {{ annual_leave_balance.carry_forward_adjustment }} day(s).
-        This adjustment is included in the effective quota shown above.
-      </div>
-    </div>
-    {% endif %}
-
-    {% if annual_leave_balance.unpaid_leaves > 0 %}
-    <div class="alert alert-warning d-flex align-items-start gap-2 mt-3 mb-0 py-2 small">
-      <i class="fa-solid fa-triangle-exclamation mt-1"></i>
-      <div>
-        You have {{ annual_leave_balance.unpaid_leaves }} unpaid leave(s) this year.
-        This means deducted leave days exceeded the available paid quota.
-      </div>
-    </div>
-    {% endif %}
-
-    <div class="text-muted small mt-3">
-      <i class="fa-solid fa-circle-info me-1"></i>
-      Balance is calculated using the current production rule:
-      <strong>Pending + Approved</strong> full-day leaves reduce the paid balance.
-      Half-day leaves show as <strong>0.5 day</strong> in leave history but do
-      <strong>not</strong> reduce the yearly paid leave quota.
-      Rejected and cancelled leaves do not reduce the balance.
-    </div>
-
   </div>
 </div>
+
+<style>
+  .leave-balance-card {
+    border-radius: 14px;
+    overflow: hidden;
+  }
+  .balance-box {
+    border: 1px solid #e5e7eb;
+    border-radius: 12px;
+    padding: 16px 10px;
+    background: #fff;
+  }
+  .balance-label {
+    color: #6b7280;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: .05em;
+    text-transform: uppercase;
+    margin-bottom: 7px;
+  }
+  .balance-value {
+    font-size: 1.75rem;
+    line-height: 1;
+    font-weight: 800;
+  }
+  .balance-note {
+    color: #9ca3af;
+    font-size: 11px;
+    margin-top: 7px;
+  }
+</style>
 {% endif %}
