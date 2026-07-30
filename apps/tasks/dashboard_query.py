@@ -45,16 +45,19 @@ def _end_of_today_project_tz(now: datetime) -> datetime:
 
 
 def _exclude_voided(qs):
-    """
-    Exclude voided/skipped rows if the model has the boolean field.
-    This keeps the query safe even if migrations are not applied yet.
-    """
-    try:
-        # Django model field existence check (safe)
-        Checklist._meta.get_field("is_skipped_due_to_leave")  # type: ignore[attr-defined]
-        return qs.filter(is_skipped_due_to_leave=False)
-    except Exception:
-        return qs
+    """Exclude skipped, permanently deleted, and inactive checklist rows."""
+    filters = {}
+    for field_name, value in (
+        ("is_skipped_due_to_leave", False),
+        ("is_deleted", False),
+        ("is_active", True),
+    ):
+        try:
+            Checklist._meta.get_field(field_name)
+            filters[field_name] = value
+        except Exception:
+            pass
+    return qs.filter(**filters) if filters else qs
 
 
 def _exclude_voided_any_model(qs, model):

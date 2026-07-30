@@ -56,6 +56,7 @@ from .utils import (
     send_admin_bulk_summary,
 )
 from .recurrence_utils import preserve_first_occurrence_time, normalize_mode
+from .services.checklist_lifecycle import recurring_series_q
 
 # ✅ Single source of truth: leave blocking
 from apps.tasks.utils.blocking import (
@@ -312,10 +313,27 @@ def _checklist_series_filter_kwargs(obj) -> dict:
 
 
 def _checklist_series_queryset(obj, *, include_skipped: bool = True):
+    """Return all rows belonging to the same recurring series.
+
+    Uses legacy-tolerant matching so NULL frequency is treated as 1 and
+    NULL/blank group names are treated as the same value. This prevents an old
+    completed row from escaping permanent deletion and later restarting the
+    recurrence.
+    """
     qs = Checklist.objects.all()
-    if not include_skipped and hasattr(Checklist, "is_skipped_due_to_leave"):
+    if not include_skipped and checklist_has_field("is_skipped_due_to_leave"):
         qs = qs.filter(is_skipped_due_to_leave=False)
-    return qs.filter(**_checklist_series_filter_kwargs(obj))
+
+    mode = _normalized_checklist_mode(getattr(obj, "mode", None))
+    return qs.filter(
+        recurring_series_q(
+            assign_to_id=getattr(obj, "assign_to_id", None),
+            task_name=getattr(obj, "task_name", None),
+            mode=mode,
+            frequency=getattr(obj, "frequency", None),
+            group_name=getattr(obj, "group_name", None),
+        )
+    )
 
 
 def _void_checklist_entry(obj, *, deleted_by=None) -> int:

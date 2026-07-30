@@ -1,4 +1,4 @@
-#E:\CLIENT PROJECT\employee management system bos\employee_management_system\apps\tasks\management\commands\roll_recurrences.py
+#apps\tasks\management\commands\roll_recurrences.py
 from __future__ import annotations
 
 import logging
@@ -7,252 +7,196 @@ from zoneinfo import ZoneInfo
 
 from django.core.management.base import BaseCommand
 from django.db import transaction
-from django.db.models import Q
 from django.utils import timezone
 
 from apps.settings.models import Holiday
 from apps.tasks.models import Checklist
-from apps.tasks.recurrence_utils import (
-    RECURRING_MODES,
-    get_next_planned_date,
-    normalize_mode,
+from apps.tasks.recurrence_utils import RECURRING_MODES, get_next_planned_date, normalize_mode
+from apps.tasks.services.checklist_lifecycle import (
+    active_occurrences,
+    recurring_series_q,
+    series_is_permanently_deleted,
 )
 from apps.tasks.utils.blocking import is_user_blocked_at
 
 logger = logging.getLogger(__name__)
-
 IST = ZoneInfo("Asia/Kolkata")
 ASSIGN_ANCHOR_T = dt_time(10, 0)
 DUE_T = dt_time(19, 0)
 
 
-def _safe_console_text(s: object) -> str:
+def _safe_console_text(value: object) -> str:
     try:
-        return ("" if s is None else str(s)).encode("utf-8", "replace").decode("utf-8", "replace")
+        return ("" if value is None else str(value)).encode("utf-8", "replace").decode("utf-8", "replace")
     except Exception:
-        try:
-            return repr(s)
-        except Exception:
-            return ""
+        return repr(value)
 
 
 def _to_ist(dt: datetime) -> datetime:
-    tz = timezone.get_current_timezone()
     if timezone.is_naive(dt):
-        dt = timezone.make_aware(dt, tz)
+        dt = timezone.make_aware(dt, timezone.get_current_timezone())
     return dt.astimezone(IST)
 
 
-def _is_holiday_or_sunday(d: date) -> bool:
+def _is_holiday_or_sunday(day: date) -> bool:
+    if day.weekday() == 6:
+        return True
     try:
-        if d.weekday() == 6:
-            return True
+        return bool(Holiday.is_holiday(day))
     except Exception:
-        pass
-    try:
-        return Holiday.is_holiday(d)
-    except Exception:
-        return False
+        return Holiday.objects.filter(date=day).exists()
 
 
 def _get_user(user_id: int):
     from django.contrib.auth import get_user_model
-
-    User = get_user_model()
-    return User.objects.filter(id=user_id, is_active=True).first()
+    return get_user_model().objects.filter(id=user_id, is_active=True).first()
 
 
-def _is_user_blocked_on_date_at_10am(user_id: int, d: date) -> bool:
-    """
-    Leave anchor for "day-of visibility" decisions: 10:00 IST.
-    Full-day leave blocks the day, half-day blocks only if overlapping 10:00 IST.
-    """
+def _is_user_blocked_on_date_at_10am(user_id: int, day: date) -> bool:
     user = _get_user(user_id)
     if not user:
         return False
-    anchor_ist = datetime.combine(d, ASSIGN_ANCHOR_T, tzinfo=IST)
-    return bool(is_user_blocked_at(user, anchor_ist))
+    return bool(is_user_blocked_at(user, datetime.combine(day, ASSIGN_ANCHOR_T, tzinfo=IST)))
 
 
-def _push_to_next_allowed_date(user_id: int, d: date) -> date:
-    """
-    Advance until:
-      - not Sunday/holiday
-      - not blocked by leave at 10:00 IST
-    """
-    cur = d
-    for _ in range(0, 120):
-        if (not _is_holiday_or_sunday(cur)) and (not _is_user_blocked_on_date_at_10am(user_id, cur)):
-            return cur
-        cur += timedelta(days=1)
-    return cur
-
-
-def _series_q(
-    *,
-    assign_to_id: int,
-    task_name: str,
-    mode: str,
-    frequency: int | None,
-    group_name: str | None,
-) -> tuple[Q, int]:
-    """
-    Legacy-tolerant grouping: treat NULL frequency as 1.
-    Excludes tombstoned rows (is_skipped_due_to_leave=True) so they don't participate in series logic.
-    """
-    freq = max(int(frequency or 1), 1)
-    q = Q(assign_to_id=assign_to_id, task_name=task_name, mode=mode, is_skipped_due_to_leave=False)
-    if group_name:
-        q &= Q(group_name=group_name)
-    q &= Q(frequency__in=[freq, None])
-    return q, freq
+def _push_to_next_allowed_date(user_id: int, day: date) -> date:
+    current = day
+    for _ in range(120):
+        if not _is_holiday_or_sunday(current) and not _is_user_blocked_on_date_at_10am(user_id, current):
+            return current
+        current += timedelta(days=1)
+    return current
 
 
 class Command(BaseCommand):
     help = (
-        "Backfill missed recurrences (Checklist) WITHOUT violating the rule: next spawns ONLY after completion.\n"
-        "For each series, if there is NO Pending item and there IS a Completed item, create the next at 19:00 IST.\n"
-        "This command shifts the next date off Sunday/holidays and off assignee leave (leave check @ 10:00 IST).\n"
-        "IMPORTANT: This command does NOT send checklist emails. Consolidated 10:00 IST digest handles notifications."
+        "Backfill missed checklist recurrences using the legacy date-shift rule. "
+        "Permanently deleted/inactive series are always excluded."
     )
 
     def add_arguments(self, parser):
-        parser.add_argument("--dry-run", action="store_true", help="Show actions without writing to DB")
-        parser.add_argument("--user-id", type=int, help="Limit to a specific assignee (user id)")
+        parser.add_argument("--dry-run", action="store_true")
+        parser.add_argument("--user-id", type=int)
 
     def handle(self, *args, **opts):
-        dry_run = bool(opts.get("dry_run", False))
+        dry_run = bool(opts.get("dry_run"))
         user_id = opts.get("user_id")
+        now_ist = timezone.now().astimezone(IST)
 
-        now = timezone.now()
-        now_ist = now.astimezone(IST)
-
-        filters = {"mode__in": RECURRING_MODES, "is_skipped_due_to_leave": False}
+        base_qs = Checklist.objects.filter(mode__in=RECURRING_MODES)
         if user_id:
-            filters["assign_to_id"] = user_id
+            base_qs = base_qs.filter(assign_to_id=user_id)
 
         seeds = (
-            Checklist.objects.filter(**filters)
+            active_occurrences(base_qs)
             .values("assign_to_id", "task_name", "mode", "frequency", "group_name")
             .distinct()
         )
 
         created = 0
         processed = 0
-
         if dry_run:
-            self.stdout.write(self.style.WARNING("DRY RUN — no tasks will be created."))
+            self.stdout.write(self.style.WARNING("DRY RUN - no tasks will be created."))
 
-        for s in seeds:
+        for series in seeds:
             processed += 1
-
-            mode_norm = normalize_mode(s["mode"])
-            if mode_norm not in RECURRING_MODES:
+            mode = normalize_mode(series["mode"])
+            if mode not in RECURRING_MODES:
                 continue
 
-            q_series, freq_norm = _series_q(
-                assign_to_id=s["assign_to_id"],
-                task_name=s["task_name"],
-                mode=mode_norm,
-                frequency=s["frequency"],
-                group_name=s["group_name"],
+            frequency = max(int(series.get("frequency") or 1), 1)
+            series_q = recurring_series_q(
+                assign_to_id=series["assign_to_id"],
+                task_name=series["task_name"],
+                mode=mode,
+                frequency=frequency,
+                group_name=series.get("group_name"),
             )
 
-            if Checklist.objects.filter(status="Pending").filter(q_series).exists():
+            if series_is_permanently_deleted(series_q):
                 continue
 
-            base = (
-                Checklist.objects.filter(status="Completed")
-                .filter(q_series)
+            if active_occurrences(Checklist.objects.filter(series_q, status="Pending")).exists():
+                continue
+
+            source = (
+                active_occurrences(Checklist.objects.filter(series_q, status="Completed"))
                 .order_by("-planned_date", "-id")
                 .first()
             )
-            if not base or not base.planned_date:
+            if not source or not source.planned_date:
                 continue
 
-            next_planned = get_next_planned_date(base.planned_date, mode_norm, freq_norm)
+            next_planned = get_next_planned_date(source.planned_date, mode, frequency)
             if not next_planned:
                 continue
 
-            next_date_ist = _to_ist(next_planned).date()
-            safe_date = _push_to_next_allowed_date(s["assign_to_id"], next_date_ist)
-            if safe_date != next_date_ist:
+            next_date = _to_ist(next_planned).date()
+            safe_date = _push_to_next_allowed_date(series["assign_to_id"], next_date)
+            if safe_date != next_date:
                 next_planned = datetime.combine(safe_date, DUE_T, tzinfo=IST).astimezone(
                     timezone.get_current_timezone()
                 )
 
-            try:
-                if _to_ist(next_planned).date() == now_ist.date():
-                    logger.info(
-                        _safe_console_text(
-                            f"[MISSED] Suppressed TODAY creation for series '{s['task_name']}' "
-                            f"(user_id={s['assign_to_id']}) @ {_to_ist(next_planned):%Y-%m-%d %H:%M IST}"
-                        )
-                    )
-                    continue
-            except Exception:
+            if _to_ist(next_planned).date() == now_ist.date():
                 continue
 
-            dupe = (
-                Checklist.objects.filter(status="Pending")
-                .filter(q_series)
-                .filter(
+            if active_occurrences(
+                Checklist.objects.filter(
+                    series_q,
+                    status="Pending",
                     planned_date__gte=next_planned - timedelta(minutes=1),
                     planned_date__lt=next_planned + timedelta(minutes=1),
                 )
-                .exists()
-            )
-            if dupe:
+            ).exists():
                 continue
 
             if dry_run:
                 created += 1
                 self.stdout.write(
-                    f"[DRY RUN] Would create: {s['task_name']} → {_to_ist(next_planned):%Y-%m-%d %H:%M IST}"
+                    f"[DRY RUN] Would create: {series['task_name']} -> {_to_ist(next_planned):%Y-%m-%d %H:%M IST}"
                 )
                 continue
 
             try:
                 with transaction.atomic():
+                    if series_is_permanently_deleted(series_q):
+                        continue
                     obj = Checklist.objects.create(
-                        assign_by=base.assign_by,
-                        task_name=base.task_name,
-                        message=getattr(base, "message", "") or "",
-                        assign_to=base.assign_to,
+                        assign_by=source.assign_by,
+                        task_name=source.task_name,
+                        message=getattr(source, "message", "") or "",
+                        assign_to=source.assign_to,
                         planned_date=next_planned,
-                        priority=getattr(base, "priority", None),
-                        attachment_mandatory=getattr(base, "attachment_mandatory", False),
-                        mode=base.mode,
-                        frequency=freq_norm,
-                        time_per_task_minutes=getattr(base, "time_per_task_minutes", 0) or 0,
-                        remind_before_days=getattr(base, "remind_before_days", 0) or 0,
-                        assign_pc=getattr(base, "assign_pc", None),
-                        notify_to=getattr(base, "notify_to", None),
-                        auditor=getattr(base, "auditor", None),
-                        set_reminder=getattr(base, "set_reminder", False),
-                        reminder_mode=getattr(base, "reminder_mode", None),
-                        reminder_frequency=getattr(base, "reminder_frequency", None),
-                        reminder_starting_time=getattr(base, "reminder_starting_time", None),
-                        checklist_auto_close=getattr(base, "checklist_auto_close", False),
-                        checklist_auto_close_days=getattr(base, "checklist_auto_close_days", 0) or 0,
-                        group_name=getattr(base, "group_name", None),
+                        priority=source.priority,
+                        attachment_mandatory=source.attachment_mandatory,
+                        mode=source.mode,
+                        frequency=frequency,
+                        time_per_task_minutes=source.time_per_task_minutes or 0,
+                        remind_before_days=source.remind_before_days or 0,
+                        assign_pc=source.assign_pc,
+                        notify_to=source.notify_to,
+                        auditor=getattr(source, "auditor", None),
+                        set_reminder=source.set_reminder,
+                        reminder_mode=source.reminder_mode,
+                        reminder_frequency=source.reminder_frequency,
+                        reminder_starting_time=source.reminder_starting_time,
+                        checklist_auto_close=source.checklist_auto_close,
+                        checklist_auto_close_days=source.checklist_auto_close_days or 0,
+                        group_name=source.group_name,
                         actual_duration_minutes=0,
                         status="Pending",
                         is_skipped_due_to_leave=False,
+                        is_deleted=False,
+                        is_active=True,
+                        delete_reason="",
+                        skip_reason="",
                     )
                 created += 1
-                self.stdout.write(
-                    self.style.SUCCESS(
-                        f"✅ Created: CL-{obj.id} '{obj.task_name}' @ {_to_ist(obj.planned_date):%Y-%m-%d %H:%M IST}"
-                    )
-                )
-            except Exception as e:
-                logger.exception("Failed to create missed recurrence for %s: %s", s, e)
-                self.stdout.write(self.style.ERROR(f"❌ Failed: {s['task_name']} - {e}"))
+                self.stdout.write(self.style.SUCCESS(f"Created CL-{obj.id}: {obj.task_name}"))
+            except Exception as exc:
+                logger.exception("Failed to roll recurrence for %s: %s", series, exc)
+                self.stdout.write(self.style.ERROR(f"Failed: {series['task_name']} - {exc}"))
 
-        if dry_run:
-            self.stdout.write(self.style.WARNING(f"[DRY RUN] Would create {created} task(s) from {processed} series"))
-        else:
-            self.stdout.write(self.style.SUCCESS(f"Created {created} task(s) from {processed} series"))
-        if created == 0:
-            self.stdout.write("No missed recurrences needed to be created.")
+        message = f"Would create {created}" if dry_run else f"Created {created}"
+        self.stdout.write(f"{message} task(s) from {processed} series")

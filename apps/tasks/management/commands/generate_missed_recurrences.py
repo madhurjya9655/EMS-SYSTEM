@@ -18,6 +18,12 @@ from apps.tasks.recurrence_utils import (
     normalize_mode,
 )
 from apps.tasks.utils.blocking import is_user_blocked_at
+from apps.tasks.services.checklist_lifecycle import (
+    active_occurrences,
+    apply_new_occurrence_lifecycle_defaults,
+    recurring_series_q,
+    series_is_permanently_deleted,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -109,32 +115,21 @@ def _should_skip_recurring_date(user_id: int, d: date) -> tuple[bool, str | None
     return False, None
 
 def _series_q(
-    *,
+    *args,
     assign_to_id: int,
     task_name: str,
     mode: str,
     frequency: int | None,
     group_name: str | None,
-) -> tuple[Q, int]:
-    """
-    Legacy-tolerant grouping:
-    - Treat NULL frequency as 1.
-    - Exclude tombstoned/skipped rows so they do not participate in series logic.
-    """
+):
     freq = max(int(frequency or 1), 1)
-
-    q = Q(
+    q = recurring_series_q(
         assign_to_id=assign_to_id,
         task_name=task_name,
         mode=mode,
-        is_skipped_due_to_leave=False,
+        frequency=freq,
+        group_name=group_name,
     )
-
-    if group_name:
-        q &= Q(group_name=group_name)
-
-    q &= Q(frequency__in=[freq, None])
-
     return q, freq
 
 
@@ -161,14 +156,13 @@ class Command(BaseCommand):
 
         filters = {
             "mode__in": RECURRING_MODES,
-            "is_skipped_due_to_leave": False,
         }
 
         if user_id:
             filters["assign_to_id"] = user_id
 
         seeds = (
-            Checklist.objects.filter(**filters)
+            active_occurrences(Checklist.objects.filter(**filters))
             .values("assign_to_id", "task_name", "mode", "frequency", "group_name")
             .distinct()
         )
@@ -195,14 +189,24 @@ class Command(BaseCommand):
                 group_name=s["group_name"],
             )
 
+            if series_is_permanently_deleted(q_series):
+                logger.info(
+                    _safe_console_text(
+                        f"[RECUR] Permanently deleted series skipped: {s['task_name']} "
+                        f"user_id={s['assign_to_id']}"
+                    )
+                )
+                continue
+
             # Completion-gated rule:
             # If any pending occurrence exists in this series, do not generate another.
-            if Checklist.objects.filter(status="Pending").filter(q_series).exists():
+            if active_occurrences(Checklist.objects.filter(status="Pending").filter(q_series)).exists():
                 continue
 
             base = (
-                Checklist.objects.filter(status="Completed")
-                .filter(q_series)
+                active_occurrences(
+                    Checklist.objects.filter(status="Completed").filter(q_series)
+                )
                 .order_by("-planned_date", "-id")
                 .first()
             )
@@ -258,8 +262,9 @@ class Command(BaseCommand):
                 continue
 
             dupe = (
-                Checklist.objects.filter(status="Pending")
-                .filter(q_series)
+                active_occurrences(
+                    Checklist.objects.filter(status="Pending").filter(q_series)
+                )
                 .filter(
                     planned_date__gte=next_planned - timedelta(minutes=1),
                     planned_date__lt=next_planned + timedelta(minutes=1),
@@ -304,6 +309,10 @@ class Command(BaseCommand):
                         actual_duration_minutes=0,
                         status="Pending",
                         is_skipped_due_to_leave=False,
+                        is_deleted=False,
+                        is_active=True,
+                        delete_reason="",
+                        skip_reason="",
                     )
 
                 created += 1

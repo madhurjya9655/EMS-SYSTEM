@@ -23,6 +23,12 @@ from apps.tasks.services.blocking import guard_assign
 from apps.tasks.services.holiday_guard import is_holiday_for_user, holiday_skip_reason
 from apps.tasks.utils import send_delegation_assignment_to_user
 from apps.tasks.utils.blocking import is_user_blocked_at
+from apps.tasks.services.checklist_lifecycle import (
+    active_occurrences,
+    apply_new_occurrence_lifecycle_defaults,
+    recurring_series_q,
+    series_is_permanently_deleted,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -140,180 +146,22 @@ def _should_skip_recurring_date(user_id: int, d: date) -> tuple[bool, str | None
 
 
 def _series_q(
+    *args,
     assign_to_id: int,
     task_name: str,
     mode: str,
     frequency: int | None,
     group_name: str | None,
 ):
-    """
-    Legacy-tolerant grouping.
-
-    Series identity:
-    - assign_to
-    - task_name
-    - mode
-    - frequency
-    - group_name
-
-    Treat NULL frequency as 1.
-    Exclude leave-skipped rows.
-    """
     freq = max(int(frequency or 1), 1)
-
-    q = Q(
+    q = recurring_series_q(
         assign_to_id=assign_to_id,
         task_name=task_name,
         mode=mode,
-        is_skipped_due_to_leave=False,
+        frequency=freq,
+        group_name=group_name,
     )
-
-    if group_name:
-        q &= Q(group_name=group_name)
-    else:
-        q &= Q(group_name__in=["", None])
-
-    q &= Q(frequency__in=[freq, None])
-
     return q, freq
-
-
-def _is_self_assigned(obj) -> bool:
-    try:
-        return bool(
-            obj.assign_by_id
-            and obj.assign_to_id
-            and obj.assign_by_id == obj.assign_to_id
-        )
-    except Exception:
-        return False
-
-
-def _send_delegation_10am_emails(today_ist: date, user_id: int | None, dry_run: bool) -> int:
-    """
-    Delegations:
-    - Send day-of reminder after 10:00 IST.
-    - Respect holiday/leave/self-assign guards.
-
-    Checklist day-of emails are handled by consolidated 10:00 IST digest:
-    apps/tasks/tasks.py::send_due_today_assignments
-
-    This command does NOT email checklists.
-    """
-    if not SEND_EMAILS_FOR_AUTO_RECUR:
-        return 0
-
-    # BOS Lakshya hard rule:
-    # Sunday/Holiday = complete off day.
-    # No delegation reminder email should go out.
-    if is_holiday_for_user(None, today_ist):
-        logger.info(
-            _safe_console_text(
-                f"Skip delegation 10AM emails for {today_ist}: "
-                f"{holiday_skip_reason(today_ist) or 'off_day'}"
-            )
-        )
-        return 0
-
-    if SEND_RECUR_EMAILS_ONLY_AT_10AM and not _after_10am_today():
-        return 0
-
-    start_today_ist = datetime.combine(today_ist, dt_time.min, tzinfo=IST)
-    end_today_ist = datetime.combine(today_ist, dt_time.max, tzinfo=IST)
-
-    start_proj = start_today_ist.astimezone(timezone.get_current_timezone())
-    end_proj = end_today_ist.astimezone(timezone.get_current_timezone())
-
-    qs = (
-        Delegation.objects
-        .filter(
-            status="Pending",
-            planned_date__gte=start_proj,
-            planned_date__lte=end_proj,
-            is_skipped_due_to_leave=False,
-        )
-        .select_related("assign_to", "assign_by")
-    )
-
-    if user_id:
-        qs = qs.filter(assign_to_id=user_id)
-
-    sent = 0
-
-    for obj in qs:
-        if _is_self_assigned(obj):
-            logger.info(
-                _safe_console_text(
-                    f"Skip delegation 10AM email for DL-{obj.id}: self-assigned"
-                )
-            )
-            continue
-
-        # Final per-object protection.
-        # Even if today-level check is bypassed, holiday planned_date blocks email.
-        if is_holiday_for_user(obj.assign_to, obj.planned_date):
-            logger.info(
-                _safe_console_text(
-                    f"Skip delegation 10AM email for DL-{obj.id}: "
-                    f"planned date is Sunday/holiday"
-                )
-            )
-            continue
-
-        try:
-            p_ist = _to_ist(obj.planned_date)
-
-            anchor_ist = p_ist.replace(
-                hour=ASSIGN_ANCHOR_T.hour,
-                minute=ASSIGN_ANCHOR_T.minute,
-                second=0,
-                microsecond=0,
-            )
-
-            if not guard_assign(obj.assign_to, anchor_ist):
-                logger.info(
-                    _safe_console_text(
-                        f"Skip delegation 10AM email for DL-{obj.id}: "
-                        f"assignee blocked at 10:00 IST"
-                    )
-                )
-                continue
-
-        except Exception:
-            logger.exception(
-                "Delegation 10AM guard failed for DL-%s",
-                getattr(obj, "id", None),
-            )
-            continue
-
-        try:
-            subject = f"Today’s Delegation – {obj.task_name} (due 7 PM)"
-            complete_url = f"{SITE_URL}{reverse('tasks:complete_delegation', args=[obj.id])}"
-
-            if not dry_run:
-                send_delegation_assignment_to_user(
-                    delegation=obj,
-                    complete_url=complete_url,
-                    subject_prefix=subject,
-                )
-
-            sent += 1
-
-        except Exception as e:
-            logger.error(
-                "Failed to send delegation 10AM email for DL-%s: %s",
-                getattr(obj, "id", "?"),
-                e,
-            )
-
-    if sent:
-        logger.info(
-            _safe_console_text(
-                f"Sent {sent} Delegation reminders for {today_ist}"
-            )
-        )
-
-    return sent
 
 
 class Command(BaseCommand):
@@ -362,15 +210,13 @@ class Command(BaseCommand):
 
         filters = {
             "mode__in": RECURRING_MODES,
-            "is_skipped_due_to_leave": False,
         }
 
         if user_id:
             filters["assign_to_id"] = user_id
 
         seeds = (
-            Checklist.objects
-            .filter(**filters)
+            active_occurrences(Checklist.objects.filter(**filters))
             .values(
                 "assign_to_id",
                 "task_name",
@@ -402,15 +248,24 @@ class Command(BaseCommand):
                 group_name=s["group_name"],
             )
 
+            if series_is_permanently_deleted(q_series):
+                logger.info(
+                    _safe_console_text(
+                        f"[RECUR] Permanently deleted series skipped: {s['task_name']} "
+                        f"user_id={s['assign_to_id']}"
+                    )
+                )
+                continue
+
             # Completion-gated rule:
             # If any pending occurrence exists in this series, do not generate another.
-            if Checklist.objects.filter(status="Pending").filter(q_series).exists():
+            if active_occurrences(Checklist.objects.filter(status="Pending").filter(q_series)).exists():
                 continue
 
             base = (
-                Checklist.objects
-                .filter(status="Completed")
-                .filter(q_series)
+                active_occurrences(
+                    Checklist.objects.filter(status="Completed").filter(q_series)
+                )
                 .order_by("-planned_date", "-id")
                 .first()
             )
@@ -475,9 +330,9 @@ class Command(BaseCommand):
                 continue
 
             dupe = (
-                Checklist.objects
-                .filter(status="Pending")
-                .filter(q_series)
+                active_occurrences(
+                    Checklist.objects.filter(status="Pending").filter(q_series)
+                )
                 .filter(
                     planned_date__gte=next_dt - timedelta(minutes=1),
                     planned_date__lt=next_dt + timedelta(minutes=1),
@@ -544,6 +399,10 @@ class Command(BaseCommand):
                         actual_duration_minutes=0,
                         status="Pending",
                         is_skipped_due_to_leave=False,
+                        is_deleted=False,
+                        is_active=True,
+                        delete_reason="",
+                        skip_reason="",
                     )
 
                 created_total += 1

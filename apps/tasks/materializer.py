@@ -43,6 +43,12 @@ from .recurrence_utils import (
 )
 from .utils import _safe_console_text
 from apps.tasks.services.blocking import guard_assign  # single source of truth
+from apps.tasks.services.checklist_lifecycle import (
+    active_occurrences,
+    apply_new_occurrence_lifecycle_defaults,
+    recurring_series_q,
+    series_is_permanently_deleted,
+)
 
 IST = pytz.timezone(getattr(settings, "TIME_ZONE", "Asia/Kolkata"))
 
@@ -108,15 +114,13 @@ def _series_identity_hash(*, uid: int, task_name: str, mode: str, freq_norm: int
 
 
 def _series_q_tolerant(assign_to_id: int, task_name: str, mode: str, freq_norm: int, group_name: str | None):
-    """
-    Tolerate legacy rows where `frequency` was NULL by treating NULL as 1.
-    """
-    freq_set = [freq_norm, None]
-    q = Q(assign_to_id=assign_to_id, task_name=task_name, mode=mode)
-    if group_name:
-        q &= Q(group_name=group_name)
-    q &= Q(frequency__in=freq_set)
-    return q
+    return recurring_series_q(
+        assign_to_id=assign_to_id,
+        task_name=task_name,
+        mode=mode,
+        frequency=freq_norm,
+        group_name=group_name,
+    )
 
 
 def _today_row_exists(q_series) -> bool:
@@ -180,32 +184,33 @@ def _create_today_from_completed(completed_obj: Checklist, next_dt: datetime, fr
     Create a "today" row by cloning fields from the latest completed occurrence.
     NOTE: Emails are NOT sent here. The 10:00 AM mailer will handle notifications.
     """
+    data = apply_new_occurrence_lifecycle_defaults({
+        "assign_by": completed_obj.assign_by,
+        "task_name": completed_obj.task_name,
+        "message": completed_obj.message,
+        "assign_to": completed_obj.assign_to,
+        "planned_date": next_dt,
+        "priority": completed_obj.priority,
+        "attachment_mandatory": completed_obj.attachment_mandatory,
+        "mode": completed_obj.mode,
+        "frequency": freq_norm,
+        "time_per_task_minutes": completed_obj.time_per_task_minutes,
+        "remind_before_days": completed_obj.remind_before_days,
+        "assign_pc": completed_obj.assign_pc,
+        "notify_to": completed_obj.notify_to,
+        "auditor": getattr(completed_obj, "auditor", None),
+        "set_reminder": completed_obj.set_reminder,
+        "reminder_mode": completed_obj.reminder_mode,
+        "reminder_frequency": completed_obj.reminder_frequency,
+        "reminder_starting_time": completed_obj.reminder_starting_time,
+        "checklist_auto_close": completed_obj.checklist_auto_close,
+        "checklist_auto_close_days": completed_obj.checklist_auto_close_days,
+        "group_name": getattr(completed_obj, "group_name", None),
+        "actual_duration_minutes": 0,
+        "status": "Pending",
+    })
     with transaction.atomic():
-        obj = Checklist.objects.create(
-            assign_by=completed_obj.assign_by,
-            task_name=completed_obj.task_name,
-            message=completed_obj.message,
-            assign_to=completed_obj.assign_to,
-            planned_date=next_dt,  # already pinned to 19:00 IST by recurrence_utils
-            priority=completed_obj.priority,
-            attachment_mandatory=completed_obj.attachment_mandatory,
-            mode=completed_obj.mode,
-            frequency=freq_norm,
-            time_per_task_minutes=completed_obj.time_per_task_minutes,
-            remind_before_days=completed_obj.remind_before_days,
-            assign_pc=completed_obj.assign_pc,
-            notify_to=completed_obj.notify_to,
-            auditor=getattr(completed_obj, "auditor", None),
-            set_reminder=completed_obj.set_reminder,
-            reminder_mode=completed_obj.reminder_mode,
-            reminder_frequency=completed_obj.reminder_frequency,
-            reminder_starting_time=completed_obj.reminder_starting_time,
-            checklist_auto_close=completed_obj.checklist_auto_close,
-            checklist_auto_close_days=completed_obj.checklist_auto_close_days,
-            group_name=getattr(completed_obj, "group_name", None),
-            actual_duration_minutes=0,
-            status="Pending",
-        )
+        obj = Checklist.objects.create(**data)
     return obj
 
 
@@ -280,13 +285,11 @@ def materialize_today_for_all(*, user_id: int | None = None, dry_run: bool = Fal
         return res
 
     filters = {"mode__in": RECURRING_MODES}
-    if hasattr(Checklist, "is_skipped_due_to_leave"):
-        filters["is_skipped_due_to_leave"] = False
     if user_id:
         filters["assign_to_id"] = user_id
 
     seeds = (
-        Checklist.objects.filter(**filters)
+        active_occurrences(Checklist.objects.filter(**filters))
         .values("assign_to_id", "task_name", "mode", "frequency", "group_name")
         .distinct()
     )
@@ -318,6 +321,12 @@ def materialize_today_for_all(*, user_id: int | None = None, dry_run: bool = Fal
             group_name=group_name,
         )
 
+        # Permanent series tombstone always wins over cache/date logic.
+        if series_is_permanently_deleted(q_series):
+            res.skipped_exists += 1
+            res.add(uid, None, f"permanently_deleted:{task_name}")
+            continue
+
         # Strong safety: if we already materialized this series today, do nothing.
         marker_lock = None
         if not dry_run:
@@ -341,9 +350,9 @@ def materialize_today_for_all(*, user_id: int | None = None, dry_run: bool = Fal
                 continue
 
             # Need a completed occurrence to step from
-            completed_qs = Checklist.objects.filter(status="Completed").filter(q_series)
-            if hasattr(Checklist, "is_skipped_due_to_leave"):
-                completed_qs = completed_qs.filter(is_skipped_due_to_leave=False)
+            completed_qs = active_occurrences(
+                Checklist.objects.filter(status="Completed").filter(q_series)
+            )
 
             completed = completed_qs.order_by("-planned_date", "-id").first()
             if not completed:
