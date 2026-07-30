@@ -1,0 +1,407 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}Edit Leave Balance — BOS Lakshya{% endblock %}
+{% block navbar_title %}All Employee Leave{% endblock %}
+{% block breadcrumb %}Edit Leave Balance{% endblock %}
+{% block page_title %}{% endblock %}
+
+{% block content %}
+<style>
+  .balance-edit-page {
+    --primary: #4f8cff;
+    --primary-dark: #2563eb;
+    --primary-soft: #eef5ff;
+    --success: #059669;
+    --text: #172033;
+    --muted: #6b7280;
+    --border: #e5eaf2;
+    --surface: #ffffff;
+  }
+
+  .balance-edit-shell {
+    max-width: 880px;
+    margin: 18px auto 40px;
+  }
+
+  .balance-edit-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 22px;
+    overflow: hidden;
+    box-shadow: 0 18px 48px rgba(15, 23, 42, .085);
+  }
+
+  .balance-edit-hero {
+    position: relative;
+    overflow: hidden;
+    padding: 26px 28px;
+    color: #fff;
+    background:
+      radial-gradient(circle at 90% 12%, rgba(255,255,255,.2), transparent 24%),
+      linear-gradient(135deg, #315fd6 0%, #4f8cff 58%, #70a6ff 100%);
+  }
+
+  .balance-edit-hero::after {
+    content: "";
+    position: absolute;
+    width: 185px;
+    height: 185px;
+    border-radius: 50%;
+    border: 1px solid rgba(255,255,255,.2);
+    right: -60px;
+    bottom: -105px;
+  }
+
+  .balance-edit-head {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+
+  .balance-edit-avatar {
+    width: 58px;
+    height: 58px;
+    border-radius: 17px;
+    display: grid;
+    place-items: center;
+    flex: 0 0 auto;
+    background: rgba(255,255,255,.16);
+    border: 1px solid rgba(255,255,255,.32);
+    color: #fff;
+    font-size: 19px;
+    font-weight: 800;
+    text-transform: uppercase;
+  }
+
+  .balance-edit-title {
+    margin: 0;
+    color: #fff;
+    font-size: 1.45rem;
+    font-weight: 800;
+    letter-spacing: -.03em;
+  }
+
+  .balance-edit-subtitle {
+    margin-top: 4px;
+    color: rgba(255,255,255,.84);
+    font-size: 13px;
+  }
+
+  .balance-edit-body {
+    padding: 27px 28px 24px;
+  }
+
+  .balance-edit-info {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+    margin-bottom: 23px;
+  }
+
+  .balance-edit-info-card {
+    background: #f8fafc;
+    border: 1px solid #e7ecf3;
+    border-radius: 14px;
+    padding: 14px 15px;
+  }
+
+  .balance-edit-info-label {
+    display: block;
+    margin-bottom: 4px;
+    color: #8993a5;
+    font-size: 10.5px;
+    font-weight: 800;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+  }
+
+  .balance-edit-info-value {
+    color: var(--text);
+    font-size: 13.5px;
+    font-weight: 750;
+  }
+
+  .balance-edit-error-summary {
+    margin-bottom: 20px;
+    border: 1px solid #fecaca;
+    background: #fef2f2;
+    color: #991b1b;
+    border-radius: 13px;
+    padding: 13px 15px;
+    font-size: 13px;
+  }
+
+  .balance-edit-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 18px;
+  }
+
+  .balance-edit-field {
+    min-width: 0;
+  }
+
+  .balance-edit-field.full-width {
+    grid-column: 1 / -1;
+  }
+
+  .balance-edit-field label {
+    display: block;
+    margin-bottom: 7px;
+    color: #374151;
+    font-size: 12.5px;
+    font-weight: 700;
+  }
+
+  .balance-edit-field input,
+  .balance-edit-field select,
+  .balance-edit-field textarea {
+    width: 100%;
+    min-height: 42px;
+    border: 1.5px solid #dde3ec;
+    border-radius: 12px;
+    background: #fff;
+    color: var(--text);
+    padding: 10px 12px;
+    font-size: 13.5px;
+    outline: none;
+    transition: border-color .16s ease, box-shadow .16s ease, background .16s ease;
+  }
+
+  .balance-edit-field textarea {
+    min-height: 105px;
+    resize: vertical;
+  }
+
+  .balance-edit-field input:focus,
+  .balance-edit-field select:focus,
+  .balance-edit-field textarea:focus {
+    border-color: var(--primary);
+    box-shadow: 0 0 0 4px rgba(79, 140, 255, .10);
+    background: #fff;
+  }
+
+  .balance-edit-field input[readonly],
+  .balance-edit-field input:disabled,
+  .balance-edit-field select:disabled {
+    background: #f5f7fa;
+    color: #778195;
+    cursor: not-allowed;
+  }
+
+  .balance-edit-help {
+    margin-top: 6px;
+    color: var(--muted);
+    font-size: 11.5px;
+    line-height: 1.45;
+  }
+
+  .balance-edit-error {
+    margin-top: 6px;
+    color: #dc2626;
+    font-size: 11.5px;
+    font-weight: 600;
+  }
+
+  .balance-edit-note {
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+    margin-top: 22px;
+    border: 1px solid #cfe0ff;
+    background: var(--primary-soft);
+    color: #315d9c;
+    border-radius: 14px;
+    padding: 13px 14px;
+    font-size: 12.5px;
+    line-height: 1.5;
+  }
+
+  .balance-edit-note i {
+    margin-top: 2px;
+    color: var(--primary-dark);
+  }
+
+  .balance-edit-footer {
+    padding: 17px 28px;
+    border-top: 1px solid #edf0f5;
+    background: #fbfcfe;
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+
+  .balance-edit-btn {
+    min-height: 40px;
+    padding: 9px 16px;
+    border-radius: 11px;
+    border: 1px solid transparent;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    text-decoration: none;
+    font-size: 13px;
+    font-weight: 750;
+    transition: transform .15s ease, box-shadow .15s ease, background .15s ease;
+  }
+
+  .balance-edit-btn:hover {
+    transform: translateY(-1px);
+  }
+
+  .balance-edit-cancel {
+    background: #fff;
+    color: #4b5563;
+    border-color: #d9e0e9;
+  }
+
+  .balance-edit-cancel:hover {
+    background: #f8fafc;
+    color: #273249;
+  }
+
+  .balance-edit-save {
+    background: var(--primary);
+    border-color: var(--primary);
+    color: #fff;
+    box-shadow: 0 6px 16px rgba(79, 140, 255, .24);
+  }
+
+  .balance-edit-save:hover {
+    background: var(--primary-dark);
+    border-color: var(--primary-dark);
+    color: #fff;
+    box-shadow: 0 8px 22px rgba(37, 99, 235, .28);
+  }
+
+  @media (max-width: 720px) {
+    .balance-edit-shell {
+      margin-top: 8px;
+    }
+
+    .balance-edit-card {
+      border-radius: 17px;
+    }
+
+    .balance-edit-hero,
+    .balance-edit-body,
+    .balance-edit-footer {
+      padding-left: 18px;
+      padding-right: 18px;
+    }
+
+    .balance-edit-info,
+    .balance-edit-grid {
+      grid-template-columns: 1fr;
+    }
+
+    .balance-edit-footer {
+      align-items: stretch;
+    }
+
+    .balance-edit-btn {
+      flex: 1 1 100%;
+    }
+  }
+</style>
+
+<div class="balance-edit-page">
+  <div class="balance-edit-shell">
+    <div class="balance-edit-card">
+      <div class="balance-edit-hero">
+        <div class="balance-edit-head">
+          <div class="balance-edit-avatar">
+            {{ balance.employee.first_name|default:balance.employee.username|slice:":1" }}{{ balance.employee.last_name|slice:":1" }}
+          </div>
+          <div>
+            <h1 class="balance-edit-title">Edit Leave Balance</h1>
+            <div class="balance-edit-subtitle">
+              {{ balance.employee.get_full_name|default:balance.employee.username }}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <form method="post">
+        {% csrf_token %}
+
+        <div class="balance-edit-body">
+          <div class="balance-edit-info">
+            <div class="balance-edit-info-card">
+              <span class="balance-edit-info-label">Employee</span>
+              <div class="balance-edit-info-value">
+                {{ balance.employee.get_full_name|default:balance.employee.username }}
+              </div>
+            </div>
+
+            <div class="balance-edit-info-card">
+              <span class="balance-edit-info-label">Financial Year</span>
+              <div class="balance-edit-info-value">
+                {{ balance.leave_year_start|date:"d M Y" }} – {{ balance.leave_year_end|date:"d M Y" }}
+              </div>
+            </div>
+          </div>
+
+          {% if form.non_field_errors %}
+          <div class="balance-edit-error-summary">
+            <i class="fa-solid fa-circle-exclamation me-1"></i>
+            {{ form.non_field_errors }}
+          </div>
+          {% endif %}
+
+          <div class="balance-edit-grid">
+            {% for field in form %}
+            <div class="balance-edit-field {% if field.field.widget.input_type == 'textarea' or field.name == 'remarks' %}full-width{% endif %}">
+              <label for="{{ field.id_for_label }}">{{ field.label }}</label>
+              {{ field }}
+
+              {% if field.help_text %}
+              <div class="balance-edit-help">{{ field.help_text|safe }}</div>
+              {% endif %}
+
+              {% for error in field.errors %}
+              <div class="balance-edit-error">
+                <i class="fa-solid fa-circle-exclamation me-1"></i>{{ error }}
+              </div>
+              {% endfor %}
+            </div>
+            {% endfor %}
+          </div>
+
+          <div class="balance-edit-note">
+            <i class="fa-solid fa-circle-info"></i>
+            <div>
+              Saving changes updates the current balance record and writes an audit entry.
+              Historical leave requests and approvals remain unchanged.
+            </div>
+          </div>
+        </div>
+
+        <div class="balance-edit-footer">
+          <a
+            class="balance-edit-btn balance-edit-cancel"
+            href="{% url 'leave:employee_leave_detail' balance.employee_id %}"
+          >
+            <i class="fa-solid fa-arrow-left"></i>
+            Cancel
+          </a>
+
+          <button
+            type="submit"
+            class="balance-edit-btn balance-edit-save"
+          >
+            <i class="fa-solid fa-check"></i>
+            Save Changes
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}

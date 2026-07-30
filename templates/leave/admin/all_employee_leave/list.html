@@ -1,0 +1,864 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}All Employee Leave — BOS Lakshya{% endblock %}
+{% block navbar_title %}All Employee Leave{% endblock %}
+{% block breadcrumb %}All Employee Leave{% endblock %}
+{% block page_title %}All Employee Leave{% endblock %}
+
+{% block content %}
+<style>
+  .leave-admin-page {
+    --la-blue: #4f8cff;
+    --la-blue-dark: #2563eb;
+    --la-blue-soft: #eef5ff;
+    --la-green: #16a34a;
+    --la-green-soft: #ecfdf3;
+    --la-amber: #d97706;
+    --la-amber-soft: #fff8e7;
+    --la-red: #dc2626;
+    --la-red-soft: #fff1f2;
+    --la-violet: #7c3aed;
+    --la-violet-soft: #f5f3ff;
+    --la-border: #e7eaf0;
+    --la-text: #172033;
+    --la-muted: #6b7280;
+  }
+
+  .leave-admin-page .page-intro {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 22px;
+  }
+
+  .leave-admin-page .page-intro h2 {
+    margin: 0;
+    font-family: var(--font-display, 'Plus Jakarta Sans', sans-serif);
+    color: var(--la-text);
+    font-size: clamp(1.55rem, 2vw, 2rem);
+    font-weight: 800;
+    letter-spacing: -.035em;
+  }
+
+  .leave-admin-page .page-intro p {
+    margin: 7px 0 0;
+    color: var(--la-muted);
+    font-size: 13.5px;
+  }
+
+  .leave-admin-page .fy-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 38px;
+    padding: 8px 13px;
+    border: 1px solid #dbe7ff;
+    border-radius: 999px;
+    color: #2457a7;
+    background: #f5f9ff;
+    font-weight: 700;
+    font-size: 12.5px;
+    white-space: nowrap;
+  }
+
+  .leave-admin-page .summary-grid {
+    display: grid;
+    grid-template-columns: repeat(7, minmax(145px, 1fr));
+    gap: 12px;
+    margin-bottom: 20px;
+  }
+
+  .leave-admin-page .summary-card {
+    position: relative;
+    min-height: 116px;
+    padding: 17px 16px;
+    overflow: hidden;
+    border: 1px solid var(--la-border);
+    border-radius: 16px;
+    background: #fff;
+    box-shadow: 0 5px 20px rgba(15, 23, 42, .055);
+    transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease;
+  }
+
+  .leave-admin-page .summary-card:hover {
+    transform: translateY(-2px);
+    border-color: #d5dce8;
+    box-shadow: 0 10px 28px rgba(15, 23, 42, .09);
+  }
+
+  .leave-admin-page .summary-card::after {
+    content: '';
+    position: absolute;
+    right: -22px;
+    bottom: -28px;
+    width: 86px;
+    height: 86px;
+    border-radius: 50%;
+    background: currentColor;
+    opacity: .055;
+  }
+
+  .leave-admin-page .summary-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 13px;
+  }
+
+  .leave-admin-page .summary-label {
+    color: var(--la-muted);
+    font-size: 10.5px;
+    line-height: 1.3;
+    font-weight: 800;
+    letter-spacing: .065em;
+    text-transform: uppercase;
+  }
+
+  .leave-admin-page .summary-icon {
+    width: 32px;
+    height: 32px;
+    flex: 0 0 32px;
+    display: grid;
+    place-items: center;
+    border-radius: 10px;
+    font-size: 13px;
+  }
+
+  .leave-admin-page .summary-value {
+    color: var(--la-text);
+    font-family: var(--font-display, 'Plus Jakarta Sans', sans-serif);
+    font-size: 1.55rem;
+    line-height: 1;
+    font-weight: 800;
+    letter-spacing: -.035em;
+  }
+
+  .leave-admin-page .tone-blue { color: var(--la-blue-dark); }
+  .leave-admin-page .tone-blue .summary-icon { color: var(--la-blue-dark); background: var(--la-blue-soft); }
+  .leave-admin-page .tone-green { color: var(--la-green); }
+  .leave-admin-page .tone-green .summary-icon { color: var(--la-green); background: var(--la-green-soft); }
+  .leave-admin-page .tone-violet { color: var(--la-violet); }
+  .leave-admin-page .tone-violet .summary-icon { color: var(--la-violet); background: var(--la-violet-soft); }
+  .leave-admin-page .tone-amber { color: var(--la-amber); }
+  .leave-admin-page .tone-amber .summary-icon { color: var(--la-amber); background: var(--la-amber-soft); }
+  .leave-admin-page .tone-red { color: var(--la-red); }
+  .leave-admin-page .tone-red .summary-icon { color: var(--la-red); background: var(--la-red-soft); }
+
+  .leave-admin-page .filter-card {
+    margin-bottom: 20px;
+    padding: 16px;
+    border: 1px solid var(--la-border);
+    border-radius: 16px;
+    background: #fff;
+    box-shadow: 0 5px 20px rgba(15, 23, 42, .045);
+  }
+
+  .leave-admin-page .filter-grid {
+    display: grid;
+    grid-template-columns: minmax(220px, 1.45fr) repeat(5, minmax(135px, 1fr)) auto;
+    gap: 10px;
+    align-items: end;
+  }
+
+  .leave-admin-page .filter-field label {
+    display: block;
+    margin: 0 0 6px 2px;
+    color: #667085;
+    font-size: 10.5px;
+    font-weight: 800;
+    letter-spacing: .055em;
+    text-transform: uppercase;
+  }
+
+  .leave-admin-page .input-shell {
+    position: relative;
+  }
+
+  .leave-admin-page .input-shell > i {
+    position: absolute;
+    left: 13px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: #98a2b3;
+    font-size: 12px;
+    pointer-events: none;
+  }
+
+  .leave-admin-page .input-shell .form-control {
+    padding-left: 36px;
+  }
+
+  .leave-admin-page .form-control,
+  .leave-admin-page .form-select {
+    min-height: 42px;
+    border-color: #dde2ea;
+    border-radius: 11px;
+    color: #293247;
+    background-color: #fff;
+    font-size: 13px;
+  }
+
+  .leave-admin-page .form-control:focus,
+  .leave-admin-page .form-select:focus {
+    border-color: var(--la-blue);
+    box-shadow: 0 0 0 3px rgba(79, 140, 255, .12);
+  }
+
+  .leave-admin-page .filter-actions {
+    display: flex;
+    gap: 8px;
+  }
+
+  .leave-admin-page .btn-filter,
+  .leave-admin-page .btn-reset {
+    min-height: 42px;
+    padding: 0 16px;
+    border-radius: 11px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+    font-size: 12.5px;
+    font-weight: 700;
+    white-space: nowrap;
+  }
+
+  .leave-admin-page .btn-filter {
+    border: 1px solid var(--la-blue);
+    color: #fff;
+    background: linear-gradient(135deg, #5b93ff, #3d7cf3);
+    box-shadow: 0 6px 15px rgba(79, 140, 255, .24);
+  }
+
+  .leave-admin-page .btn-filter:hover {
+    color: #fff;
+    background: linear-gradient(135deg, #4a86fa, #2e6de6);
+  }
+
+  .leave-admin-page .btn-reset {
+    width: 42px;
+    padding: 0;
+    border: 1px solid #dde2ea;
+    color: #687386;
+    background: #fff;
+  }
+
+  .leave-admin-page .btn-reset:hover {
+    color: var(--la-blue-dark);
+    border-color: #bdd1f7;
+    background: #f6f9ff;
+  }
+
+  .leave-admin-page .table-card {
+    border: 1px solid var(--la-border);
+    border-radius: 17px;
+    background: #fff;
+    box-shadow: 0 8px 26px rgba(15, 23, 42, .055);
+    overflow: hidden;
+  }
+
+  .leave-admin-page .table-toolbar {
+    min-height: 62px;
+    padding: 14px 18px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    border-bottom: 1px solid #edf0f4;
+  }
+
+  .leave-admin-page .table-title {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    color: var(--la-text);
+    font-size: 14px;
+    font-weight: 800;
+  }
+
+  .leave-admin-page .table-title-icon {
+    width: 34px;
+    height: 34px;
+    display: grid;
+    place-items: center;
+    border-radius: 10px;
+    color: var(--la-blue-dark);
+    background: var(--la-blue-soft);
+  }
+
+  .leave-admin-page .record-count {
+    padding: 4px 9px;
+    border: 1px solid #dbe7ff;
+    border-radius: 999px;
+    color: #315fa8;
+    background: #f5f9ff;
+    font-size: 11px;
+    font-weight: 800;
+  }
+
+  .leave-admin-page .scroll-note {
+    color: #8791a2;
+    font-size: 11.5px;
+  }
+
+  .leave-admin-page .table-scroll {
+    width: 100%;
+    overflow-x: auto;
+    scrollbar-width: thin;
+    scrollbar-color: #cbd3df transparent;
+  }
+
+  .leave-admin-page .leave-table {
+    width: 100%;
+    min-width: 1740px;
+    margin: 0;
+    border-collapse: separate;
+    border-spacing: 0;
+    font-size: 12.5px;
+  }
+
+  .leave-admin-page .leave-table thead th {
+    position: sticky;
+    top: 0;
+    z-index: 3;
+    padding: 12px 10px;
+    border-bottom: 1px solid #dfe4eb;
+    color: #667085;
+    background: #f8fafc;
+    font-size: 10.5px;
+    line-height: 1.25;
+    font-weight: 800;
+    letter-spacing: .055em;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+
+  .leave-admin-page .leave-table tbody td {
+    padding: 13px 10px;
+    border-bottom: 1px solid #eef1f5;
+    color: #344054;
+    background: #fff;
+    vertical-align: middle;
+    white-space: nowrap;
+  }
+
+  .leave-admin-page .leave-table tbody tr:hover td {
+    background: #fbfdff;
+  }
+
+  .leave-admin-page .leave-table tbody tr:last-child td {
+    border-bottom: none;
+  }
+
+  .leave-admin-page .sticky-employee {
+    position: sticky;
+    left: 0;
+    z-index: 2;
+    min-width: 220px;
+    box-shadow: 8px 0 12px -13px rgba(15, 23, 42, .65);
+  }
+
+  .leave-admin-page thead .sticky-employee {
+    z-index: 5;
+    background: #f8fafc;
+  }
+
+  .leave-admin-page .sticky-actions {
+    position: sticky;
+    right: 0;
+    z-index: 2;
+    min-width: 158px;
+    text-align: right;
+    box-shadow: -8px 0 12px -13px rgba(15, 23, 42, .65);
+  }
+
+  .leave-admin-page thead .sticky-actions {
+    z-index: 5;
+    background: #f8fafc;
+  }
+
+  .leave-admin-page .employee-cell {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+  }
+
+  .leave-admin-page .employee-avatar {
+    width: 36px;
+    height: 36px;
+    flex: 0 0 36px;
+    display: grid;
+    place-items: center;
+    border: 1px solid #cfddf8;
+    border-radius: 11px;
+    color: #356ac3;
+    background: #edf4ff;
+    font-size: 12px;
+    font-weight: 800;
+    text-transform: uppercase;
+  }
+
+  .leave-admin-page .employee-meta {
+    min-width: 0;
+  }
+
+  .leave-admin-page .employee-name {
+    max-width: 155px;
+    overflow: hidden;
+    color: #172033;
+    font-weight: 750;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .leave-admin-page .employee-email {
+    max-width: 155px;
+    margin-top: 2px;
+    overflow: hidden;
+    color: #8a94a5;
+    font-size: 10.5px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .leave-admin-page .status-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 9px;
+    border-radius: 999px;
+    font-size: 10.5px;
+    font-weight: 800;
+  }
+
+  .leave-admin-page .status-badge::before {
+    content: '';
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+  }
+
+  .leave-admin-page .status-active {
+    color: #087443;
+    border: 1px solid #b7ebcf;
+    background: #ecfdf3;
+  }
+
+  .leave-admin-page .status-active::before { background: #12b76a; }
+
+  .leave-admin-page .status-inactive {
+    color: #b42318;
+    border: 1px solid #fecdca;
+    background: #fff1f0;
+  }
+
+  .leave-admin-page .status-inactive::before { background: #f04438; }
+
+  .leave-admin-page .number-cell {
+    font-variant-numeric: tabular-nums;
+    font-weight: 650;
+  }
+
+  .leave-admin-page .available-positive {
+    color: #067647;
+    font-weight: 800;
+  }
+
+  .leave-admin-page .available-negative {
+    color: #b42318;
+    font-weight: 800;
+  }
+
+  .leave-admin-page .muted-value { color: #98a2b3; }
+
+  .leave-admin-page .date-stack {
+    line-height: 1.35;
+  }
+
+  .leave-admin-page .date-stack strong {
+    display: block;
+    color: #344054;
+    font-weight: 700;
+  }
+
+  .leave-admin-page .date-stack span {
+    color: #98a2b3;
+    font-size: 10.5px;
+  }
+
+  .leave-admin-page .action-set {
+    display: inline-flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 5px;
+  }
+
+  .leave-admin-page .action-btn {
+    width: 32px;
+    height: 32px;
+    display: inline-grid;
+    place-items: center;
+    border: 1px solid #dde2ea;
+    border-radius: 9px;
+    color: #667085;
+    background: #fff;
+    font-size: 11px;
+    transition: all .16s ease;
+  }
+
+  .leave-admin-page .action-view:hover {
+    color: #2457a7;
+    border-color: #bfd2f5;
+    background: #f2f7ff;
+  }
+
+  .leave-admin-page .action-edit:hover {
+    color: #7a4a02;
+    border-color: #f2d59e;
+    background: #fff8e7;
+  }
+
+  .leave-admin-page .action-delete:hover {
+    color: #b42318;
+    border-color: #f4b9b5;
+    background: #fff1f0;
+  }
+
+  .leave-admin-page .empty-state {
+    padding: 70px 20px !important;
+    text-align: center;
+  }
+
+  .leave-admin-page .empty-icon {
+    width: 52px;
+    height: 52px;
+    margin: 0 auto 12px;
+    display: grid;
+    place-items: center;
+    border-radius: 16px;
+    color: #7d8aa1;
+    background: #f1f4f8;
+    font-size: 20px;
+  }
+
+  .leave-admin-page .empty-state strong {
+    display: block;
+    color: #344054;
+    font-size: 14px;
+  }
+
+  .leave-admin-page .empty-state span {
+    display: block;
+    margin-top: 4px;
+    color: #98a2b3;
+    font-size: 12px;
+  }
+
+  @media (max-width: 1500px) {
+    .leave-admin-page .summary-grid {
+      grid-template-columns: repeat(4, minmax(150px, 1fr));
+    }
+    .leave-admin-page .filter-grid {
+      grid-template-columns: minmax(220px, 1.4fr) repeat(3, minmax(150px, 1fr));
+    }
+    .leave-admin-page .filter-actions { grid-column: auto; }
+  }
+
+  @media (max-width: 992px) {
+    .leave-admin-page .summary-grid {
+      grid-template-columns: repeat(2, minmax(140px, 1fr));
+    }
+    .leave-admin-page .filter-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .leave-admin-page .filter-actions {
+      grid-column: 1 / -1;
+    }
+    .leave-admin-page .btn-filter { flex: 1; }
+  }
+
+  @media (max-width: 576px) {
+    .leave-admin-page .page-intro {
+      flex-direction: column;
+    }
+    .leave-admin-page .summary-grid {
+      grid-template-columns: 1fr;
+    }
+    .leave-admin-page .summary-card {
+      min-height: 96px;
+    }
+    .leave-admin-page .filter-grid {
+      grid-template-columns: 1fr;
+    }
+    .leave-admin-page .filter-actions {
+      grid-column: auto;
+    }
+    .leave-admin-page .table-toolbar {
+      align-items: flex-start;
+      flex-direction: column;
+    }
+    .leave-admin-page .scroll-note { display: none; }
+  }
+</style>
+
+<div class="leave-admin-page">
+  <div class="page-intro">
+    <div>
+      <h2>All Employee Leave</h2>
+      <p>Review, filter and manage employee leave balances from one secure workspace.</p>
+    </div>
+    <div class="fy-chip">
+      <i class="fa-regular fa-calendar"></i>
+      FY {{ fy_start|date:"Y" }}–{{ fy_end|date:"y" }}
+    </div>
+  </div>
+
+  <section class="summary-grid" aria-label="Leave summary">
+    <article class="summary-card tone-blue">
+      <div class="summary-head">
+        <span class="summary-label">Total Employees</span>
+        <span class="summary-icon"><i class="fa-solid fa-users"></i></span>
+      </div>
+      <div class="summary-value">{{ summary.total_employees|default:0 }}</div>
+    </article>
+
+    <article class="summary-card tone-green">
+      <div class="summary-head">
+        <span class="summary-label">Available Leave</span>
+        <span class="summary-icon"><i class="fa-solid fa-calendar-check"></i></span>
+      </div>
+      <div class="summary-value">{{ summary.total_available|default:0|floatformat:1 }}</div>
+    </article>
+
+    <article class="summary-card tone-violet">
+      <div class="summary-head">
+        <span class="summary-label">Paid Leave Used</span>
+        <span class="summary-icon"><i class="fa-solid fa-chart-pie"></i></span>
+      </div>
+      <div class="summary-value">{{ summary.total_paid_used|default:0|floatformat:1 }}</div>
+    </article>
+
+    <article class="summary-card tone-amber">
+      <div class="summary-head">
+        <span class="summary-label">Pending Requests</span>
+        <span class="summary-icon"><i class="fa-regular fa-clock"></i></span>
+      </div>
+      <div class="summary-value">{{ summary.total_pending|default:0 }}</div>
+    </article>
+
+    <article class="summary-card tone-red">
+      <div class="summary-head">
+        <span class="summary-label">Unpaid Leave</span>
+        <span class="summary-icon"><i class="fa-solid fa-calendar-xmark"></i></span>
+      </div>
+      <div class="summary-value">{{ summary.total_unpaid|default:0|floatformat:1 }}</div>
+    </article>
+
+    <article class="summary-card tone-red">
+      <div class="summary-head">
+        <span class="summary-label">Negative Balance</span>
+        <span class="summary-icon"><i class="fa-solid fa-triangle-exclamation"></i></span>
+      </div>
+      <div class="summary-value">{{ summary.negative_balance|default:0 }}</div>
+    </article>
+
+    <article class="summary-card tone-blue">
+      <div class="summary-head">
+        <span class="summary-label">With Carry Forward</span>
+        <span class="summary-icon"><i class="fa-solid fa-forward"></i></span>
+      </div>
+      <div class="summary-value">{{ summary.with_carry_forward|default:0 }}</div>
+    </article>
+  </section>
+
+  <form method="get" class="filter-card" autocomplete="off">
+    <div class="filter-grid">
+      <div class="filter-field">
+        <label for="leaveSearch">Employee</label>
+        <div class="input-shell">
+          <i class="fa-solid fa-magnifying-glass"></i>
+          <input id="leaveSearch" class="form-control" name="q" value="{{ request.GET.q }}" placeholder="Name, email or employee ID">
+        </div>
+      </div>
+
+      <div class="filter-field">
+        <label for="departmentFilter">Department</label>
+        <select id="departmentFilter" class="form-select" name="department">
+          <option value="">All departments</option>
+          {% for item in departments %}
+          <option value="{{ item }}" {% if request.GET.department == item %}selected{% endif %}>{{ item }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="filter-field">
+        <label for="managerFilter">Manager</label>
+        <select id="managerFilter" class="form-select" name="manager">
+          <option value="">All managers</option>
+          {% for item in managers %}
+          <option value="{{ item.id }}" {% if request.GET.manager == item.id|stringformat:'s' %}selected{% endif %}>{{ item.get_full_name|default:item.username }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="filter-field">
+        <label for="fyFilter">Financial Year</label>
+        <input id="fyFilter" class="form-control" type="number" min="2000" max="2100" name="financial_year" value="{{ request.GET.financial_year }}" placeholder="Start year">
+      </div>
+
+      <div class="filter-field">
+        <label for="statusFilter">Status</label>
+        <select id="statusFilter" class="form-select" name="status">
+          <option value="">All statuses</option>
+          <option value="active" {% if request.GET.status == 'active' %}selected{% endif %}>Active</option>
+          <option value="inactive" {% if request.GET.status == 'inactive' %}selected{% endif %}>Inactive</option>
+        </select>
+      </div>
+
+      <div class="filter-field">
+        <label for="typeFilter">Leave Type</label>
+        <select id="typeFilter" class="form-select" name="leave_type">
+          <option value="">All leave types</option>
+          {% for item in leave_types %}
+          <option value="{{ item.id }}" {% if request.GET.leave_type == item.id|stringformat:'s' %}selected{% endif %}>{{ item.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="filter-actions">
+        <button class="btn-filter" type="submit">
+          <i class="fa-solid fa-filter"></i>
+          Apply Filters
+        </button>
+        <a class="btn-reset" href="{% url 'leave:all_employee_leave' %}" title="Clear filters" aria-label="Clear filters">
+          <i class="fa-solid fa-rotate-left"></i>
+        </a>
+      </div>
+    </div>
+  </form>
+
+  <section class="table-card">
+    <div class="table-toolbar">
+      <div class="table-title">
+        <span class="table-title-icon"><i class="fa-solid fa-table-list"></i></span>
+        <span>Employee Leave Balances</span>
+        <span class="record-count">{{ rows|length }} records</span>
+      </div>
+      <div class="scroll-note"><i class="fa-solid fa-arrows-left-right me-1"></i> Scroll horizontally to view all balance fields</div>
+    </div>
+
+    <div class="table-scroll">
+      <table class="leave-table">
+        <thead>
+          <tr>
+            <th class="sticky-employee">Employee</th>
+            <th>ID</th>
+            <th>Department</th>
+            <th>Reporting Manager</th>
+            <th>Financial Year</th>
+            <th>Status</th>
+            <th class="text-end">Assigned</th>
+            <th class="text-end">Carry Forward</th>
+            <th class="text-end">Opening Adj.</th>
+            <th class="text-end">Taken</th>
+            <th class="text-end">Pending</th>
+            <th class="text-end">Approved</th>
+            <th class="text-end">Available</th>
+            <th class="text-end">Unpaid</th>
+            <th>Last Updated</th>
+            <th class="sticky-actions">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in rows %}
+          <tr>
+            <td class="sticky-employee">
+              <div class="employee-cell">
+                <div class="employee-avatar">
+                  {{ row.user.first_name|default:row.user.username|slice:":1" }}{{ row.user.last_name|slice:":1" }}
+                </div>
+                <div class="employee-meta">
+                  <div class="employee-name" title="{{ row.user.get_full_name|default:row.user.username }}">
+                    {{ row.user.get_full_name|default:row.user.username }}
+                  </div>
+                  <div class="employee-email" title="{{ row.user.email }}">{{ row.user.email|default:"No email" }}</div>
+                </div>
+              </div>
+            </td>
+            <td class="number-cell">#{{ row.user.id }}</td>
+            <td>{{ row.meta.department|default:"—" }}</td>
+            <td>
+              {% if row.meta.manager %}
+                {{ row.meta.manager.get_full_name|default:row.meta.manager.username }}
+              {% else %}
+                <span class="muted-value">Not assigned</span>
+              {% endif %}
+            </td>
+            <td>
+              <div class="date-stack">
+                <strong>{{ row.balance.leave_year_start|date:"d M Y" }}</strong>
+                <span>to {{ row.balance.leave_year_end|date:"d M Y" }}</span>
+              </div>
+            </td>
+            <td>
+              {% if row.meta.status == "Active" %}
+                <span class="status-badge status-active">Active</span>
+              {% else %}
+                <span class="status-badge status-inactive">Inactive</span>
+              {% endif %}
+            </td>
+            <td class="text-end number-cell">{{ row.balance.total_paid_leaves|floatformat:1 }}</td>
+            <td class="text-end number-cell">{{ row.balance.carry_forward_adjustment|floatformat:1 }}</td>
+            <td class="text-end number-cell">{{ row.balance.opening_adjustment|floatformat:1 }}</td>
+            <td class="text-end number-cell">{{ row.balance.paid_leaves_taken|floatformat:1 }}</td>
+            <td class="text-end number-cell">{{ row.pending }}</td>
+            <td class="text-end number-cell">{{ row.approved }}</td>
+            <td class="text-end number-cell {% if row.balance.remaining_paid_leaves < 0 %}available-negative{% else %}available-positive{% endif %}">
+              {{ row.balance.remaining_paid_leaves|floatformat:1 }}
+            </td>
+            <td class="text-end number-cell">{{ row.balance.unpaid_leaves|floatformat:1 }}</td>
+            <td>
+              {% if row.balance.pk and row.balance.updated_at %}
+                <div class="date-stack">
+                  <strong>{{ row.balance.updated_at|date:"d M Y" }}</strong>
+                  <span>{{ row.balance.updated_at|date:"h:i A" }}</span>
+                </div>
+              {% else %}
+                <span class="muted-value">Not created</span>
+              {% endif %}
+            </td>
+            <td class="sticky-actions">
+              <div class="action-set">
+                <a class="action-btn action-view" href="{% url 'leave:employee_leave_detail' row.user.id %}" title="View leave history" aria-label="View leave history">
+                  <i class="fa-regular fa-eye"></i>
+                </a>
+                {% if row.balance.pk %}
+                <a class="action-btn action-edit" href="{% url 'leave:edit_leave_balance' row.balance.pk %}" title="Edit leave balance" aria-label="Edit leave balance">
+                  <i class="fa-regular fa-pen-to-square"></i>
+                </a>
+                <a class="action-btn action-delete" href="{% url 'leave:delete_leave_balance' row.balance.pk %}" title="Delete leave balance" aria-label="Delete leave balance">
+                  <i class="fa-regular fa-trash-can"></i>
+                </a>
+                {% endif %}
+              </div>
+            </td>
+          </tr>
+          {% empty %}
+          <tr>
+            <td colspan="16" class="empty-state">
+              <div class="empty-icon"><i class="fa-solid fa-user-slash"></i></div>
+              <strong>No employees found</strong>
+              <span>Change or clear the filters and try again.</span>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+</div>
+{% endblock %}

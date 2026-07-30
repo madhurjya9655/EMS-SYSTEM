@@ -1,0 +1,366 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}Delete Leave Balance — BOS Lakshya{% endblock %}
+{% block navbar_title %}All Employee Leave{% endblock %}
+{% block breadcrumb %}Delete Leave Balance{% endblock %}
+{% block page_title %}{% endblock %}
+
+{% block content %}
+<style>
+  .balance-delete-page {
+    --danger: #dc2626;
+    --danger-dark: #b91c1c;
+    --danger-soft: #fef2f2;
+    --danger-border: #fecaca;
+    --text: #172033;
+    --muted: #6b7280;
+    --border: #e5eaf2;
+    --surface: #ffffff;
+  }
+
+  .balance-delete-shell {
+    max-width: 720px;
+    margin: 22px auto 40px;
+  }
+
+  .balance-delete-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 22px;
+    overflow: hidden;
+    box-shadow: 0 18px 45px rgba(15, 23, 42, .09);
+  }
+
+  .balance-delete-hero {
+    position: relative;
+    overflow: hidden;
+    padding: 26px 28px;
+    color: #fff;
+    background:
+      radial-gradient(circle at 92% 12%, rgba(255,255,255,.18), transparent 24%),
+      linear-gradient(135deg, #b91c1c 0%, #dc2626 58%, #ef4444 100%);
+  }
+
+  .balance-delete-hero::after {
+    content: "";
+    position: absolute;
+    width: 170px;
+    height: 170px;
+    border-radius: 50%;
+    border: 1px solid rgba(255,255,255,.2);
+    right: -54px;
+    bottom: -92px;
+  }
+
+  .balance-delete-head {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+
+  .balance-delete-icon {
+    width: 56px;
+    height: 56px;
+    border-radius: 16px;
+    display: grid;
+    place-items: center;
+    flex: 0 0 auto;
+    background: rgba(255,255,255,.16);
+    border: 1px solid rgba(255,255,255,.32);
+    font-size: 21px;
+  }
+
+  .balance-delete-title {
+    margin: 0;
+    font-size: 1.45rem;
+    font-weight: 800;
+    letter-spacing: -.025em;
+    color: #fff;
+  }
+
+  .balance-delete-subtitle {
+    margin-top: 4px;
+    color: rgba(255,255,255,.82);
+    font-size: 13px;
+  }
+
+  .balance-delete-body {
+    padding: 26px 28px 24px;
+  }
+
+  .balance-delete-summary {
+    border: 1px solid #e8edf4;
+    background: #f8fafc;
+    border-radius: 15px;
+    padding: 17px 18px;
+    margin-bottom: 18px;
+  }
+
+  .balance-delete-summary-grid {
+    display: grid;
+    grid-template-columns: 1.25fr 1fr;
+    gap: 14px;
+  }
+
+  .balance-delete-label {
+    display: block;
+    margin-bottom: 4px;
+    color: #8993a5;
+    font-size: 10.5px;
+    font-weight: 800;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+  }
+
+  .balance-delete-value {
+    color: var(--text);
+    font-size: 13.5px;
+    font-weight: 750;
+  }
+
+  .balance-delete-warning {
+    display: flex;
+    align-items: flex-start;
+    gap: 11px;
+    background: var(--danger-soft);
+    border: 1px solid var(--danger-border);
+    color: #991b1b;
+    border-radius: 14px;
+    padding: 14px 15px;
+    margin-bottom: 21px;
+    font-size: 13px;
+    line-height: 1.55;
+  }
+
+  .balance-delete-warning i {
+    margin-top: 2px;
+    color: var(--danger);
+    flex: 0 0 auto;
+  }
+
+  .balance-delete-field {
+    margin-bottom: 18px;
+  }
+
+  .balance-delete-field:last-child {
+    margin-bottom: 0;
+  }
+
+  .balance-delete-field label {
+    display: block;
+    margin-bottom: 7px;
+    color: #374151;
+    font-size: 12.5px;
+    font-weight: 700;
+  }
+
+  .balance-delete-field input,
+  .balance-delete-field textarea {
+    width: 100%;
+    border: 1.5px solid #dde3ec;
+    border-radius: 12px;
+    background: #fff;
+    color: var(--text);
+    padding: 10px 12px;
+    font-size: 13.5px;
+    outline: none;
+    transition: border-color .16s ease, box-shadow .16s ease;
+  }
+
+  .balance-delete-field input:focus,
+  .balance-delete-field textarea:focus {
+    border-color: #ef4444;
+    box-shadow: 0 0 0 4px rgba(239, 68, 68, .10);
+  }
+
+  .balance-delete-hint {
+    margin-top: 6px;
+    color: var(--muted);
+    font-size: 11.5px;
+  }
+
+  .balance-delete-footer {
+    padding: 17px 28px;
+    border-top: 1px solid #edf0f5;
+    background: #fbfcfe;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+
+  .balance-delete-btn {
+    min-height: 40px;
+    padding: 9px 16px;
+    border-radius: 11px;
+    border: 1px solid transparent;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    text-decoration: none;
+    font-size: 13px;
+    font-weight: 750;
+    transition: transform .15s ease, box-shadow .15s ease, background .15s ease;
+  }
+
+  .balance-delete-btn:hover {
+    transform: translateY(-1px);
+  }
+
+  .balance-delete-cancel {
+    background: #fff;
+    color: #4b5563;
+    border-color: #d9e0e9;
+  }
+
+  .balance-delete-cancel:hover {
+    background: #f8fafc;
+    color: #273249;
+  }
+
+  .balance-delete-submit {
+    background: var(--danger);
+    border-color: var(--danger);
+    color: #fff;
+    box-shadow: 0 6px 16px rgba(220, 38, 38, .22);
+  }
+
+  .balance-delete-submit:hover {
+    background: var(--danger-dark);
+    border-color: var(--danger-dark);
+    color: #fff;
+    box-shadow: 0 8px 20px rgba(185, 28, 28, .28);
+  }
+
+  @media (max-width: 640px) {
+    .balance-delete-shell {
+      margin-top: 8px;
+    }
+
+    .balance-delete-card {
+      border-radius: 17px;
+    }
+
+    .balance-delete-hero,
+    .balance-delete-body,
+    .balance-delete-footer {
+      padding-left: 18px;
+      padding-right: 18px;
+    }
+
+    .balance-delete-summary-grid {
+      grid-template-columns: 1fr;
+    }
+
+    .balance-delete-footer {
+      align-items: stretch;
+    }
+
+    .balance-delete-btn {
+      flex: 1 1 100%;
+    }
+  }
+</style>
+
+<div class="balance-delete-page">
+  <div class="balance-delete-shell">
+    <div class="balance-delete-card">
+      <div class="balance-delete-hero">
+        <div class="balance-delete-head">
+          <div class="balance-delete-icon">
+            <i class="fa-regular fa-trash-can"></i>
+          </div>
+          <div>
+            <h1 class="balance-delete-title">Confirm Leave Balance Deletion</h1>
+            <div class="balance-delete-subtitle">
+              This action removes only the selected balance record.
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <form method="post">
+        {% csrf_token %}
+
+        <div class="balance-delete-body">
+          <div class="balance-delete-summary">
+            <div class="balance-delete-summary-grid">
+              <div>
+                <span class="balance-delete-label">Employee</span>
+                <div class="balance-delete-value">
+                  {{ balance.employee.get_full_name|default:balance.employee.username }}
+                </div>
+              </div>
+              <div>
+                <span class="balance-delete-label">Financial Year</span>
+                <div class="balance-delete-value">
+                  {{ balance.leave_year_start|date:"d M Y" }} – {{ balance.leave_year_end|date:"d M Y" }}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="balance-delete-warning">
+            <i class="fa-solid fa-triangle-exclamation"></i>
+            <div>
+              <strong>Historical data is protected.</strong><br>
+              Leave requests, approval history, audit records and email history will not be deleted.
+            </div>
+          </div>
+
+          <div class="balance-delete-field">
+            <label for="confirm">
+              Type <strong>DELETE</strong> to confirm
+            </label>
+            <input
+              id="confirm"
+              name="confirm"
+              type="text"
+              autocomplete="off"
+              required
+              pattern="DELETE"
+              placeholder="DELETE"
+            >
+            <div class="balance-delete-hint">
+              The confirmation text must match exactly.
+            </div>
+          </div>
+
+          <div class="balance-delete-field">
+            <label for="remarks">Remarks</label>
+            <textarea
+              id="remarks"
+              name="remarks"
+              rows="4"
+              placeholder="Add a reason for deleting this incorrect balance record"
+            ></textarea>
+          </div>
+        </div>
+
+        <div class="balance-delete-footer">
+          <a
+            class="balance-delete-btn balance-delete-cancel"
+            href="{% url 'leave:employee_leave_detail' balance.employee_id %}"
+          >
+            <i class="fa-solid fa-arrow-left"></i>
+            Cancel
+          </a>
+
+          <button
+            type="submit"
+            class="balance-delete-btn balance-delete-submit"
+          >
+            <i class="fa-regular fa-trash-can"></i>
+            Delete Balance
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}

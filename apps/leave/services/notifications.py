@@ -609,55 +609,6 @@ def _build_leave_cc_fyi_message(
     return html, txt
 
 
-def _send_leave_cc_fyi_emails(
-    *,
-    leave: LeaveRequest,
-    cc_emails: Iterable[str],
-    employee_name: str,
-    leave_type_name: str,
-    handover_summary: List[Dict],
-    reply_to: List[str],
-) -> Tuple[int, List[str]]:
-    """
-    Send one private information-only email to each CC recipient.
-
-    Each CC address is used as the message TO address so recipients do not see
-    other CC recipients. No action links or signed tokens are included.
-    """
-    recipients = _dedupe_lower(cc_emails)
-    if not recipients:
-        return 0, []
-
-    html, txt = _build_leave_cc_fyi_message(
-        leave=leave,
-        employee_name=employee_name,
-        leave_type_name=leave_type_name,
-        handover_summary=handover_summary,
-    )
-
-    subject = (
-        f"FYI: Leave Request - {employee_name} ({leave_type_name})"
-    )
-
-    sent_count = 0
-    failed: List[str] = []
-
-    for recipient in recipients:
-        ok = _send(
-            subject,
-            recipient,
-            cc=[],
-            reply_to=reply_to,
-            html=html,
-            txt=txt,
-        )
-
-        if ok:
-            sent_count += 1
-        else:
-            failed.append(recipient)
-
-    return sent_count, failed
 
 
 # ---------------------------------------------------------------------------
@@ -672,22 +623,15 @@ def send_leave_request_email(
     force: bool = False,
 ) -> None:
     """
-    Send the Leave request using two strictly separated message types.
+    Send one Leave request message with the Reporting Person in TO and all configured recipients in CC.
 
     TO / Reporting Person:
     - Receives the actionable Leave request email.
     - Receives Approve and Reject links.
     - Is the only person allowed to decide the Leave.
 
-    CC recipients:
-    - Receive separate information-only emails.
-    - Receive no Approve link.
-    - Receive no Reject link.
-    - Receive no signed decision token.
-    - Cannot see other CC recipient addresses.
-
-    This separation prevents action links from being exposed to CC recipients.
-    Backend authorization must still enforce that only the authenticated
+    CC recipients receive the same single message through the CC header.
+    Backend authorization remains the security boundary: only the assigned
     LeaveRequest.reporting_person may approve or reject.
     """
     if not _email_enabled():
@@ -798,8 +742,7 @@ def send_leave_request_email(
         "manager_name": manager_name,
         "manager_email": to_addr,
 
-        # The actionable manager email must not expose CC recipients.
-        "cc_list": [],
+        "cc_list": cc,
 
         "handover_summary": handover_summary,
         "has_handovers": bool(handover_summary),
@@ -820,12 +763,12 @@ def send_leave_request_email(
 
     reply_to = [employee_email] if employee_email else []
 
-    # Manager email is sent only to TO. CC is deliberately empty because the
-    # manager message contains approval and rejection links.
+    # One SMTP message only: Reporting Person stays in TO and every configured
+    # recipient is placed in the same CC header.  No per-CC loop is used.
     manager_ok = _send(
         subject,
         to_addr,
-        cc=[],
+        cc=cc,
         reply_to=reply_to,
         html=manager_html,
         txt=manager_txt,
@@ -833,36 +776,18 @@ def send_leave_request_email(
 
     if not manager_ok:
         logger.error(
-            "Actionable Leave request email NOT delivered to TO=%s for leave #%s. "
-            "CC information emails were not sent.",
+            "Leave request email NOT delivered to TO=%s CC=%s for leave #%s.",
             to_addr,
+            cc,
             leave.id,
         )
         return
 
-    cc_sent_count, cc_failed = _send_leave_cc_fyi_emails(
-        leave=leave,
-        cc_emails=cc,
-        employee_name=employee_name,
-        leave_type_name=leave_type_name,
-        handover_summary=handover_summary,
-        reply_to=reply_to,
-    )
-
-    if cc_failed:
-        logger.error(
-            "Some Leave CC information emails failed for leave #%s: %s",
-            leave.id,
-            cc_failed,
-        )
-
     logger.info(
-        "Leave request delivery complete for leave #%s: actionable_to=%s "
-        "information_cc_sent=%s information_cc_failed=%s",
+        "Leave request delivery complete for leave #%s: to=%s cc=%s one_message=True",
         leave.id,
         to_addr,
-        cc_sent_count,
-        len(cc_failed),
+        cc,
     )
 
     try:
@@ -873,8 +798,8 @@ def send_leave_request_email(
                 extra={
                     "kind": "request",
                     "actionable_to": to_addr,
-                    "information_cc_sent": cc_sent_count,
-                    "information_cc_failed": cc_failed,
+                    "cc": cc,
+                    "message_count": 1,
                 },
             )
     except Exception:

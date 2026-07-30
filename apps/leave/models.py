@@ -1824,3 +1824,58 @@ def _sync_leave_balances_after_delete(sender, instance: LeaveRequest, **kwargs) 
             getattr(instance, "id", None),
         )
         _after_commit()
+
+class LeaveBalanceAudit(models.Model):
+    class Action(models.TextChoices):
+        CREATED = "CREATED", "Created"
+        UPDATED = "UPDATED", "Updated"
+        DELETED = "DELETED", "Deleted"
+
+    balance = models.ForeignKey(
+        EmployeeLeaveBalance,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="change_audits",
+    )
+    employee = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="leave_balance_audits",
+    )
+    changed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="leave_balance_changes_made",
+    )
+    action = models.CharField(max_length=10, choices=Action.choices)
+    before = models.JSONField(default=dict, blank=True)
+    after = models.JSONField(default=dict, blank=True)
+    remarks = models.TextField(blank=True)
+    changed_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-changed_at", "-id"]
+        indexes = [
+            models.Index(fields=["employee", "changed_at"]),
+            models.Index(fields=["action", "changed_at"]),
+        ]
+
+    @staticmethod
+    def snapshot(balance):
+        if not balance:
+            return {}
+        return {
+            "id": balance.pk,
+            "employee_id": balance.employee_id,
+            "leave_year_start": str(balance.leave_year_start),
+            "leave_year_end": str(balance.leave_year_end),
+            "total_paid_leaves": str(balance.total_paid_leaves),
+            "paid_leaves_taken": str(balance.paid_leaves_taken),
+            "unpaid_leaves": str(balance.unpaid_leaves),
+            "remaining_paid_leaves": str(balance.remaining_paid_leaves),
+            "opening_adjustment": str(balance.opening_adjustment),
+            "carry_forward_adjustment": str(balance.carry_forward_adjustment),
+        }

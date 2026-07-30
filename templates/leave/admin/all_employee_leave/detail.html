@@ -1,0 +1,725 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}{{ employee.get_full_name|default:employee.username }} — Leave Administration{% endblock %}
+{% block navbar_title %}All Employee Leave{% endblock %}
+{% block breadcrumb %}Employee Leave Detail{% endblock %}
+{% block page_title %}{% endblock %}
+
+{% block content %}
+<style>
+  .leave-detail {
+    --ld-primary: #4f8cff;
+    --ld-primary-dark: #2563eb;
+    --ld-primary-soft: #eef5ff;
+    --ld-success: #059669;
+    --ld-success-soft: #ecfdf5;
+    --ld-warning: #d97706;
+    --ld-warning-soft: #fffbeb;
+    --ld-danger: #dc2626;
+    --ld-danger-soft: #fef2f2;
+    --ld-info: #0891b2;
+    --ld-info-soft: #ecfeff;
+    --ld-text: #172033;
+    --ld-muted: #6b7280;
+    --ld-border: #e5eaf2;
+    --ld-surface: #ffffff;
+    --ld-shadow: 0 10px 32px rgba(15, 23, 42, .07);
+  }
+
+  .leave-detail * { box-sizing: border-box; }
+
+  .ld-hero {
+    position: relative;
+    overflow: hidden;
+    background:
+      radial-gradient(circle at 88% 8%, rgba(255,255,255,.22), transparent 24%),
+      linear-gradient(135deg, #315fd6 0%, #4f8cff 58%, #70a6ff 100%);
+    border-radius: 22px;
+    padding: 24px 26px;
+    margin-bottom: 20px;
+    box-shadow: 0 16px 38px rgba(49, 95, 214, .22);
+    color: #fff;
+  }
+
+  .ld-hero::after {
+    content: "";
+    position: absolute;
+    width: 210px;
+    height: 210px;
+    border: 1px solid rgba(255,255,255,.18);
+    border-radius: 50%;
+    right: -72px;
+    bottom: -108px;
+  }
+
+  .ld-hero-main {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    justify-content: space-between;
+    gap: 20px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+
+  .ld-person {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    min-width: 0;
+  }
+
+  .ld-avatar {
+    width: 66px;
+    height: 66px;
+    border-radius: 18px;
+    display: grid;
+    place-items: center;
+    flex: 0 0 auto;
+    background: rgba(255,255,255,.16);
+    border: 1px solid rgba(255,255,255,.34);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.22);
+    font-size: 22px;
+    font-weight: 800;
+    letter-spacing: .03em;
+    text-transform: uppercase;
+  }
+
+  .ld-person-copy { min-width: 0; }
+
+  .ld-eyebrow {
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    opacity: .78;
+    margin-bottom: 4px;
+  }
+
+  .ld-name {
+    margin: 0;
+    font-size: clamp(1.45rem, 2vw, 2rem);
+    font-weight: 800;
+    letter-spacing: -.035em;
+    color: #fff;
+  }
+
+  .ld-email {
+    margin-top: 4px;
+    font-size: 13px;
+    color: rgba(255,255,255,.84);
+    word-break: break-all;
+  }
+
+  .ld-hero-actions {
+    display: flex;
+    gap: 9px;
+    flex-wrap: wrap;
+  }
+
+  .ld-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    min-height: 40px;
+    padding: 9px 15px;
+    border-radius: 11px;
+    border: 1px solid transparent;
+    font-size: 13px;
+    font-weight: 700;
+    text-decoration: none;
+    transition: transform .16s ease, box-shadow .16s ease, background .16s ease;
+    white-space: nowrap;
+  }
+
+  .ld-btn:hover { transform: translateY(-1px); }
+
+  .ld-btn-light {
+    color: #244180;
+    background: #fff;
+    box-shadow: 0 5px 16px rgba(25, 55, 120, .15);
+  }
+
+  .ld-btn-light:hover { color: #173266; background: #f8fbff; }
+
+  .ld-summary-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 14px;
+    margin-bottom: 20px;
+  }
+
+  .ld-stat {
+    background: var(--ld-surface);
+    border: 1px solid var(--ld-border);
+    border-radius: 16px;
+    padding: 16px 17px;
+    box-shadow: 0 5px 18px rgba(15, 23, 42, .045);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
+  }
+
+  .ld-stat-icon {
+    width: 42px;
+    height: 42px;
+    border-radius: 12px;
+    display: grid;
+    place-items: center;
+    flex: 0 0 auto;
+    font-size: 16px;
+  }
+
+  .ld-stat:nth-child(1) .ld-stat-icon { background: var(--ld-primary-soft); color: var(--ld-primary-dark); }
+  .ld-stat:nth-child(2) .ld-stat-icon { background: var(--ld-success-soft); color: var(--ld-success); }
+  .ld-stat:nth-child(3) .ld-stat-icon { background: var(--ld-warning-soft); color: var(--ld-warning); }
+  .ld-stat:nth-child(4) .ld-stat-icon { background: var(--ld-danger-soft); color: var(--ld-danger); }
+
+  .ld-stat-label {
+    font-size: 10.5px;
+    font-weight: 800;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: #8b95a7;
+    white-space: nowrap;
+  }
+
+  .ld-stat-value {
+    margin-top: 2px;
+    font-size: 20px;
+    line-height: 1.2;
+    font-weight: 800;
+    color: var(--ld-text);
+  }
+
+  .ld-card {
+    background: var(--ld-surface);
+    border: 1px solid var(--ld-border);
+    border-radius: 18px;
+    box-shadow: var(--ld-shadow);
+    overflow: hidden;
+    margin-bottom: 20px;
+  }
+
+  .ld-card-header {
+    padding: 17px 19px;
+    border-bottom: 1px solid #edf0f5;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    flex-wrap: wrap;
+  }
+
+  .ld-card-title-wrap {
+    display: flex;
+    align-items: center;
+    gap: 11px;
+  }
+
+  .ld-card-icon {
+    width: 35px;
+    height: 35px;
+    border-radius: 10px;
+    display: grid;
+    place-items: center;
+    background: var(--ld-primary-soft);
+    color: var(--ld-primary-dark);
+    font-size: 14px;
+  }
+
+  .ld-card-title {
+    margin: 0;
+    font-size: 14px;
+    font-weight: 800;
+    color: var(--ld-text);
+  }
+
+  .ld-card-subtitle {
+    margin-top: 2px;
+    font-size: 11.5px;
+    color: var(--ld-muted);
+  }
+
+  .ld-count {
+    display: inline-flex;
+    align-items: center;
+    min-height: 27px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    background: #f3f6fa;
+    color: #637084;
+    font-size: 11px;
+    font-weight: 800;
+  }
+
+  .ld-table-wrap {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .ld-table {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+    min-width: 920px;
+    font-size: 13px;
+  }
+
+  .ld-table th {
+    background: #f8fafc;
+    color: #748095;
+    font-size: 10.5px;
+    text-transform: uppercase;
+    letter-spacing: .065em;
+    font-weight: 800;
+    padding: 11px 14px;
+    border-bottom: 1px solid #e8edf4;
+    white-space: nowrap;
+  }
+
+  .ld-table td {
+    padding: 13px 14px;
+    border-bottom: 1px solid #edf0f5;
+    color: #394255;
+    vertical-align: middle;
+  }
+
+  .ld-table tbody tr:last-child td { border-bottom: 0; }
+  .ld-table tbody tr:hover td { background: #fbfdff; }
+
+  .ld-fy {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    font-weight: 700;
+    color: #23304a;
+    white-space: nowrap;
+  }
+
+  .ld-fy i { color: var(--ld-primary); }
+
+  .ld-number {
+    font-variant-numeric: tabular-nums;
+    font-weight: 700;
+    color: #273249;
+  }
+
+  .ld-balance-positive { color: var(--ld-success); }
+  .ld-balance-negative { color: var(--ld-danger); }
+
+  .ld-actions {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    justify-content: flex-end;
+    white-space: nowrap;
+  }
+
+  .ld-action {
+    width: 32px;
+    height: 32px;
+    border-radius: 9px;
+    display: inline-grid;
+    place-items: center;
+    border: 1px solid var(--ld-border);
+    background: #fff;
+    color: #607087;
+    text-decoration: none;
+    transition: background .15s ease, border-color .15s ease, color .15s ease;
+  }
+
+  .ld-action.edit:hover {
+    background: var(--ld-primary-soft);
+    border-color: #cbdcff;
+    color: var(--ld-primary-dark);
+  }
+
+  .ld-action.delete:hover {
+    background: var(--ld-danger-soft);
+    border-color: #fecaca;
+    color: var(--ld-danger);
+  }
+
+  .ld-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 4px 9px;
+    border-radius: 999px;
+    font-size: 10.5px;
+    font-weight: 800;
+    white-space: nowrap;
+    border: 1px solid transparent;
+  }
+
+  .ld-badge.pending { background: var(--ld-warning-soft); color: #9a5b05; border-color: #fde7b1; }
+  .ld-badge.approved { background: var(--ld-success-soft); color: #047857; border-color: #b7efd7; }
+  .ld-badge.rejected,
+  .ld-badge.cancelled { background: var(--ld-danger-soft); color: #b42318; border-color: #fecaca; }
+  .ld-badge.neutral { background: #f3f4f6; color: #596274; border-color: #e5e7eb; }
+  .ld-badge.half { background: var(--ld-info-soft); color: #0e7490; border-color: #bae6fd; }
+  .ld-badge.full { background: var(--ld-primary-soft); color: #315fd6; border-color: #cbdcff; }
+
+  .ld-reason {
+    max-width: 290px;
+    white-space: normal;
+    line-height: 1.45;
+    color: #596274;
+  }
+
+  .ld-empty {
+    padding: 34px 20px;
+    text-align: center;
+    color: var(--ld-muted);
+  }
+
+  .ld-empty-icon {
+    width: 48px;
+    height: 48px;
+    border-radius: 14px;
+    display: grid;
+    place-items: center;
+    margin: 0 auto 10px;
+    background: #f3f6fa;
+    color: #a2adbd;
+    font-size: 18px;
+  }
+
+  .ld-empty strong {
+    display: block;
+    color: #4d586b;
+    font-size: 13px;
+    margin-bottom: 2px;
+  }
+
+  .ld-empty span { font-size: 12px; }
+
+  .ld-audit-action {
+    font-weight: 700;
+    color: #273249;
+  }
+
+  .ld-user {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    white-space: nowrap;
+  }
+
+  .ld-user-mini {
+    width: 28px;
+    height: 28px;
+    border-radius: 8px;
+    background: #eef3fb;
+    color: #4d6da8;
+    display: grid;
+    place-items: center;
+    font-size: 10px;
+    font-weight: 800;
+    flex: 0 0 auto;
+  }
+
+  @media (max-width: 1100px) {
+    .ld-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  }
+
+  @media (max-width: 640px) {
+    .ld-hero { padding: 20px; border-radius: 17px; }
+    .ld-avatar { width: 54px; height: 54px; border-radius: 15px; font-size: 18px; }
+    .ld-hero-actions { width: 100%; }
+    .ld-btn { flex: 1; }
+    .ld-summary-grid { grid-template-columns: 1fr; gap: 10px; }
+    .ld-stat { padding: 13px 14px; }
+    .ld-card { border-radius: 15px; margin-bottom: 14px; }
+    .ld-card-header { padding: 14px; }
+  }
+</style>
+
+<div class="leave-detail">
+  <section class="ld-hero">
+    <div class="ld-hero-main">
+      <div class="ld-person">
+        <div class="ld-avatar">
+          {{ employee.first_name|default:employee.username|slice:":1" }}{{ employee.last_name|slice:":1" }}
+        </div>
+        <div class="ld-person-copy">
+          <div class="ld-eyebrow">Employee Leave Profile</div>
+          <h1 class="ld-name">{{ employee.get_full_name|default:employee.username }}</h1>
+          <div class="ld-email"><i class="fa-regular fa-envelope me-1"></i>{{ employee.email|default:"No email available" }}</div>
+        </div>
+      </div>
+
+      <div class="ld-hero-actions">
+        <a class="ld-btn ld-btn-light" href="{% url 'leave:all_employee_leave' %}">
+          <i class="fa-solid fa-arrow-left"></i>
+          Back to All Employees
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <section class="ld-summary-grid">
+    <article class="ld-stat">
+      <div class="ld-stat-icon"><i class="fa-solid fa-calendar-check"></i></div>
+      <div>
+        <div class="ld-stat-label">Balance Records</div>
+        <div class="ld-stat-value">{{ balances|length }}</div>
+      </div>
+    </article>
+
+    <article class="ld-stat">
+      <div class="ld-stat-icon"><i class="fa-solid fa-umbrella-beach"></i></div>
+      <div>
+        <div class="ld-stat-label">Leave Requests</div>
+        <div class="ld-stat-value">{{ leaves|length }}</div>
+      </div>
+    </article>
+
+    <article class="ld-stat">
+      <div class="ld-stat-icon"><i class="fa-solid fa-clock-rotate-left"></i></div>
+      <div>
+        <div class="ld-stat-label">Audit Entries</div>
+        <div class="ld-stat-value">{{ audits|length }}</div>
+      </div>
+    </article>
+
+    <article class="ld-stat">
+      <div class="ld-stat-icon"><i class="fa-solid fa-user-shield"></i></div>
+      <div>
+        <div class="ld-stat-label">Account Status</div>
+        <div class="ld-stat-value" style="font-size:16px;">
+          {% if employee.is_active %}Active{% else %}Inactive{% endif %}
+        </div>
+      </div>
+    </article>
+  </section>
+
+  <section class="ld-card">
+    <header class="ld-card-header">
+      <div class="ld-card-title-wrap">
+        <div class="ld-card-icon"><i class="fa-solid fa-scale-balanced"></i></div>
+        <div>
+          <h2 class="ld-card-title">Leave Balances</h2>
+          <div class="ld-card-subtitle">Financial-year-wise assigned, used and available leave</div>
+        </div>
+      </div>
+      <span class="ld-count">{{ balances|length }} record{{ balances|length|pluralize }}</span>
+    </header>
+
+    {% if balances %}
+    <div class="ld-table-wrap">
+      <table class="ld-table">
+        <thead>
+          <tr>
+            <th>Financial Year</th>
+            <th>Assigned</th>
+            <th>Carry Forward</th>
+            <th>Opening</th>
+            <th>Taken</th>
+            <th>Available</th>
+            <th>Unpaid</th>
+            <th class="text-end">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for b in balances %}
+          <tr>
+            <td>
+              <span class="ld-fy">
+                <i class="fa-regular fa-calendar"></i>
+                {{ b.leave_year_start|date:"d M Y" }} – {{ b.leave_year_end|date:"d M Y" }}
+              </span>
+            </td>
+            <td><span class="ld-number">{{ b.total_paid_leaves|floatformat:1 }}</span></td>
+            <td><span class="ld-number">{{ b.carry_forward_adjustment|floatformat:1 }}</span></td>
+            <td><span class="ld-number">{{ b.opening_adjustment|floatformat:1 }}</span></td>
+            <td><span class="ld-number">{{ b.paid_leaves_taken|floatformat:1 }}</span></td>
+            <td>
+              <span class="ld-number {% if b.remaining_paid_leaves < 0 %}ld-balance-negative{% else %}ld-balance-positive{% endif %}">
+                {{ b.remaining_paid_leaves|floatformat:1 }}
+              </span>
+            </td>
+            <td><span class="ld-number">{{ b.unpaid_leaves|floatformat:1 }}</span></td>
+            <td>
+              <div class="ld-actions">
+                <a class="ld-action edit"
+                   href="{% url 'leave:edit_leave_balance' b.pk %}"
+                   title="Edit balance"
+                   aria-label="Edit balance">
+                  <i class="fa-solid fa-pen"></i>
+                </a>
+                <a class="ld-action delete"
+                   href="{% url 'leave:delete_leave_balance' b.pk %}"
+                   title="Delete balance"
+                   aria-label="Delete balance">
+                  <i class="fa-regular fa-trash-can"></i>
+                </a>
+              </div>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="ld-empty">
+      <div class="ld-empty-icon"><i class="fa-solid fa-scale-balanced"></i></div>
+      <strong>No balance records found</strong>
+      <span>No financial-year leave balance has been created for this employee.</span>
+    </div>
+    {% endif %}
+  </section>
+
+  <section class="ld-card">
+    <header class="ld-card-header">
+      <div class="ld-card-title-wrap">
+        <div class="ld-card-icon" style="background:#ecfeff;color:#0891b2;">
+          <i class="fa-solid fa-clock-rotate-left"></i>
+        </div>
+        <div>
+          <h2 class="ld-card-title">Complete Leave History</h2>
+          <div class="ld-card-subtitle">All leave applications and their current approval status</div>
+        </div>
+      </div>
+      <span class="ld-count">{{ leaves|length }} request{{ leaves|length|pluralize }}</span>
+    </header>
+
+    {% if leaves %}
+    <div class="ld-table-wrap">
+      <table class="ld-table">
+        <thead>
+          <tr>
+            <th>Date</th>
+            <th>Leave Type</th>
+            <th>Days</th>
+            <th>Duration</th>
+            <th>Status</th>
+            <th>Reason</th>
+            <th>Manager</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for leave in leaves %}
+          <tr>
+            <td>
+              <span class="ld-fy">
+                <i class="fa-regular fa-calendar"></i>
+                {{ leave.start_date|date:"d M Y" }}{% if leave.end_date != leave.start_date %} – {{ leave.end_date|date:"d M Y" }}{% endif %}
+              </span>
+            </td>
+            <td><strong>{{ leave.leave_type|default:"—" }}</strong></td>
+            <td><span class="ld-number">{{ leave.blocked_days|default:"—" }}</span></td>
+            <td>
+              {% if leave.is_half_day %}
+                <span class="ld-badge half"><i class="fa-solid fa-circle-half-stroke"></i> Half Day</span>
+              {% else %}
+                <span class="ld-badge full"><i class="fa-regular fa-calendar-check"></i> Full Day</span>
+              {% endif %}
+            </td>
+            <td>
+              {% if leave.status == "APPROVED" %}
+                <span class="ld-badge approved"><i class="fa-solid fa-check"></i> {{ leave.get_status_display }}</span>
+              {% elif leave.status == "PENDING" %}
+                <span class="ld-badge pending"><i class="fa-regular fa-clock"></i> {{ leave.get_status_display }}</span>
+              {% elif leave.status == "REJECTED" %}
+                <span class="ld-badge rejected"><i class="fa-solid fa-xmark"></i> {{ leave.get_status_display }}</span>
+              {% elif leave.status == "CANCELLED" %}
+                <span class="ld-badge cancelled"><i class="fa-solid fa-ban"></i> {{ leave.get_status_display }}</span>
+              {% else %}
+                <span class="ld-badge neutral">{{ leave.get_status_display }}</span>
+              {% endif %}
+            </td>
+            <td><div class="ld-reason">{{ leave.reason|default:"—" }}</div></td>
+            <td>
+              {% if leave.reporting_person %}
+                <div class="ld-user">
+                  <div class="ld-user-mini">
+                    {{ leave.reporting_person.first_name|default:leave.reporting_person.username|slice:":1" }}{{ leave.reporting_person.last_name|slice:":1" }}
+                  </div>
+                  <span>{{ leave.reporting_person.get_full_name|default:leave.reporting_person.username }}</span>
+                </div>
+              {% else %}
+                <span class="text-muted">—</span>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="ld-empty">
+      <div class="ld-empty-icon"><i class="fa-regular fa-calendar-xmark"></i></div>
+      <strong>No leave history</strong>
+      <span>This employee has not submitted any leave requests.</span>
+    </div>
+    {% endif %}
+  </section>
+
+  <section class="ld-card">
+    <header class="ld-card-header">
+      <div class="ld-card-title-wrap">
+        <div class="ld-card-icon" style="background:#fff7ed;color:#ea580c;">
+          <i class="fa-solid fa-shield-halved"></i>
+        </div>
+        <div>
+          <h2 class="ld-card-title">Balance Audit Trail</h2>
+          <div class="ld-card-subtitle">Administrative changes made to employee leave balances</div>
+        </div>
+      </div>
+      <span class="ld-count">{{ audits|length }} change{{ audits|length|pluralize }}</span>
+    </header>
+
+    {% if audits %}
+    <div class="ld-table-wrap">
+      <table class="ld-table" style="min-width:760px;">
+        <thead>
+          <tr>
+            <th>Changed On</th>
+            <th>Action</th>
+            <th>Changed By</th>
+            <th>Remarks</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for audit in audits %}
+          <tr>
+            <td>
+              <span class="ld-fy">
+                <i class="fa-regular fa-clock"></i>
+                {{ audit.changed_at|date:"d M Y, h:i A" }}
+              </span>
+            </td>
+            <td><span class="ld-audit-action">{{ audit.get_action_display }}</span></td>
+            <td>
+              {% if audit.changed_by %}
+                <div class="ld-user">
+                  <div class="ld-user-mini">
+                    {{ audit.changed_by.first_name|default:audit.changed_by.username|slice:":1" }}{{ audit.changed_by.last_name|slice:":1" }}
+                  </div>
+                  <span>{{ audit.changed_by.get_full_name|default:audit.changed_by.username }}</span>
+                </div>
+              {% else %}
+                <span class="ld-badge neutral"><i class="fa-solid fa-gear"></i> System</span>
+              {% endif %}
+            </td>
+            <td><div class="ld-reason">{{ audit.remarks|default:"—" }}</div></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="ld-empty">
+      <div class="ld-empty-icon"><i class="fa-solid fa-shield-halved"></i></div>
+      <strong>No balance changes recorded</strong>
+      <span>Administrative edits will appear here with the user and timestamp.</span>
+    </div>
+    {% endif %}
+  </section>
+</div>
+{% endblock %}
