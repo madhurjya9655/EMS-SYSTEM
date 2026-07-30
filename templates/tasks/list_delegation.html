@@ -1,8 +1,10 @@
-{% extends "base.html" %}
+{% extends "tasks/tasks_base.html" %}
 {% load static %}
 {% block title %}Delegations{% endblock %}
 
-{% block content %}
+{% block tab_content %}
+
+<div data-task-tab-page="delegation">
 <div class="page-header mb-4 d-flex justify-content-between align-items-center">
   <h2 class="mb-0">Delegations</h2>
   <div class="d-flex gap-2">
@@ -39,19 +41,19 @@
   <div
     class="card-header bg-primary text-white d-flex justify-content-between align-items-center"
     data-bs-toggle="collapse"
-    href="#filterPanel"
+    href="#delegationFilterPanel"
     role="button"
     aria-expanded="true"
-    aria-controls="filterPanel"
+    aria-controls="delegationFilterPanel"
     style="cursor:pointer;"
   >
     <span class="fw-semibold">
       <i class="fas fa-filter me-2" aria-hidden="true"></i> FILTER
     </span>
-    <i class="fas fa-minus" id="filterToggleIcon" aria-hidden="true"></i>
+    <i class="fas fa-minus" id="delegationFilterToggleIcon" aria-hidden="true"></i>
   </div>
 
-  <div id="filterPanel" class="collapse show">
+  <div id="delegationFilterPanel" class="collapse show">
     <div class="card-body">
       <form method="get" class="row g-3 align-items-end" role="search" aria-label="Delegation Filters">
 
@@ -481,15 +483,18 @@
 </div>
 {% endfor %}
 
+</div>
+
 {% endblock %}
 
 {% block extra_js %}
+  <script src="{% static 'js/tasks-tabs-hard-nav.js' %}" defer></script>
   <script src="{% static 'js/tasks-bulk.js' %}" defer></script>
   <script>
     // Filter toggle icon flip
     (function () {
-      const panel = document.getElementById('filterPanel');
-      const icon  = document.getElementById('filterToggleIcon');
+      const panel = document.getElementById('delegationFilterPanel');
+      const icon  = document.getElementById('delegationFilterToggleIcon');
       if (!panel || !icon) return;
       panel.addEventListener('show.bs.collapse',  () => icon.className = 'fas fa-minus');
       panel.addEventListener('hide.bs.collapse',  () => icon.className = 'fas fa-plus');
