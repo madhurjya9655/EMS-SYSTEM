@@ -15,28 +15,29 @@ logger = logging.getLogger(__name__)
 
 class Command(BaseCommand):
     """
-    Generate recurring Checklist occurrences from ChecklistRecurringSeries.
+    Generate recurring Checklist occurrences from series masters.
 
-    Recurring-series ownership belongs only to ChecklistRecurringSeries.
-    Existing Checklist rows are occurrences/history and are not used to infer
-    series identity.
+    ChecklistRecurringSeries is the only source of truth for recurrence.
+    Existing Checklist rows are occurrences/history only.
 
     Safety rules:
     - inactive series are ignored;
     - deleted series are ignored permanently;
+    - inactive employees are ignored by the centralized generator;
     - completed Checklist history is preserved;
-    - an existing active Pending occurrence blocks another occurrence;
-    - Sunday, holiday and leave-blocked occurrences are skipped centrally;
+    - an existing active pending occurrence blocks another occurrence;
+    - Sundays, holidays and leave-blocked dates are skipped centrally;
     - no Checklist assignment email is sent by this command;
     - dry-run does not write to the database.
 
-    The --no-email option is retained only so old Render/Cron commands do not
-    fail. This command does not send Checklist emails in either mode.
+    The --no-email option remains for compatibility with old Render or cron
+    commands. This command does not send emails in either mode.
     """
 
     help = (
-        "Generate Checklist occurrences from ChecklistRecurringSeries. "
-        "Use --dry-run to inspect actions without writing to the database."
+        "Generate Checklist occurrences from "
+        "ChecklistRecurringSeries. Use --dry-run to inspect "
+        "actions without writing to the database."
     )
 
     def add_arguments(self, parser):
@@ -50,15 +51,19 @@ class Command(BaseCommand):
         parser.add_argument(
             "--dry-run",
             action="store_true",
-            help="Show what would happen without creating Checklist rows.",
+            help=(
+                "Show what would happen without creating "
+                "Checklist rows."
+            ),
         )
 
         parser.add_argument(
             "--no-email",
             action="store_true",
             help=(
-                "Retained for backward compatibility with existing schedules. "
-                "This command never sends Checklist emails."
+                "Retained for backward compatibility with "
+                "existing schedules. This command never sends "
+                "Checklist emails."
             ),
         )
 
@@ -67,8 +72,8 @@ class Command(BaseCommand):
             type=int,
             default=1000,
             help=(
-                "Maximum number of active recurring-series masters to inspect. "
-                "Default: 1000."
+                "Maximum number of active recurring-series masters "
+                "to inspect. Default: 1000."
             ),
         )
 
@@ -86,10 +91,14 @@ class Command(BaseCommand):
         try:
             limit = int(options.get("limit") or 1000)
         except (TypeError, ValueError) as exc:
-            raise CommandError("--limit must be a valid integer.") from exc
+            raise CommandError(
+                "--limit must be a valid integer."
+            ) from exc
 
         if limit < 1:
-            raise CommandError("--limit must be greater than zero.")
+            raise CommandError(
+                "--limit must be greater than zero."
+            )
 
         self.stdout.write("")
         self.stdout.write(
@@ -97,11 +106,13 @@ class Command(BaseCommand):
                 "Checklist recurring-series generator"
             )
         )
+
         self.stdout.write(
-            f"Mode       : {'DRY-RUN' if dry_run else 'APPLY'}"
+            f"Mode        : {'DRY-RUN' if dry_run else 'APPLY'}"
         )
         self.stdout.write(
-            f"User ID    : {user_id if user_id is not None else 'ALL'}"
+            f"User ID     : "
+            f"{user_id if user_id is not None else 'ALL'}"
         )
         self.stdout.write(f"Series limit: {limit}")
         self.stdout.write("")
@@ -129,6 +140,7 @@ class Command(BaseCommand):
 
         checked = int(result.get("checked") or 0)
         created = int(result.get("created") or 0)
+
         rows: list[dict[str, Any]] = list(
             result.get("results") or []
         )
@@ -137,7 +149,9 @@ class Command(BaseCommand):
 
         for row in rows:
             reason = str(row.get("reason") or "unknown")
-            reason_counts[reason] = reason_counts.get(reason, 0) + 1
+            reason_counts[reason] = (
+                reason_counts.get(reason, 0) + 1
+            )
 
             if show_details:
                 self.stdout.write(
@@ -145,9 +159,16 @@ class Command(BaseCommand):
                         {
                             "series_id": row.get("series_id"),
                             "created": bool(row.get("created")),
-                            "occurrence_id": row.get("occurrence_id"),
-                            "planned_date": row.get("planned_date"),
+                            "occurrence_id": row.get(
+                                "occurrence_id"
+                            ),
+                            "planned_date": row.get(
+                                "planned_date"
+                            ),
                             "reason": reason,
+                            "skipped_steps": int(
+                                row.get("skipped_steps") or 0
+                            ),
                         },
                         default=str,
                         sort_keys=True,
@@ -160,15 +181,27 @@ class Command(BaseCommand):
             if row.get("reason") == "dry_run_would_create"
         )
 
+        errors = sum(
+            count
+            for reason, count in reason_counts.items()
+            if reason.startswith("error:")
+        )
+
         self.stdout.write("")
         self.stdout.write("Summary")
         self.stdout.write("-" * 72)
         self.stdout.write(f"Series checked : {checked}")
 
         if dry_run:
-            self.stdout.write(f"Would create   : {would_create}")
+            self.stdout.write(
+                f"Would create   : {would_create}"
+            )
         else:
-            self.stdout.write(f"Created        : {created}")
+            self.stdout.write(
+                f"Created        : {created}"
+            )
+
+        self.stdout.write(f"Errors         : {errors}")
 
         if reason_counts:
             self.stdout.write("")
@@ -177,20 +210,30 @@ class Command(BaseCommand):
 
             for reason in sorted(reason_counts):
                 self.stdout.write(
-                    f"{reason:<40} {reason_counts[reason]}"
+                    f"{reason:<48} {reason_counts[reason]}"
                 )
 
         self.stdout.write("")
 
+        if errors:
+            self.stdout.write(
+                self.style.ERROR(
+                    f"The generator reported {errors} error result(s). "
+                    "Review the details before running in APPLY mode."
+                )
+            )
+
         if dry_run:
             self.stdout.write(
                 self.style.WARNING(
-                    "Dry-run complete. No Checklist rows or recurring-series "
-                    "records were modified."
+                    "Dry-run complete. No Checklist rows or "
+                    "recurring-series records were modified."
                 )
             )
+
             self.stdout.write(
-                "Run without --dry-run only after reviewing the output."
+                "Run without --dry-run only after reviewing "
+                "the output."
             )
 
         else:
@@ -201,4 +244,7 @@ class Command(BaseCommand):
                 )
             )
 
-        return result
+        # Django management commands should return None or a string.
+        # Returning the result dictionary causes:
+        # AttributeError: 'dict' object has no attribute 'endswith'
+        return None

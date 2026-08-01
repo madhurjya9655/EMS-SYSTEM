@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+from typing import Any
 
 from django.core.management.base import BaseCommand, CommandError
 
@@ -16,14 +17,23 @@ class Command(BaseCommand):
     """
     Backfill missed recurring Checklist occurrences from series masters.
 
-    This is a compatibility command. It uses the same centralized generator as
-    Celery and generate_recurring_tasks, so legacy Checklist-row inference can
-    no longer recreate a deleted series.
+    This command uses ChecklistRecurringSeries as the only source of truth.
+    It never infers recurring-series identity from old Checklist rows.
+
+    Safety rules:
+    - inactive recurring masters are ignored;
+    - deleted recurring masters are ignored permanently;
+    - inactive employees are ignored by the centralized generator;
+    - an existing active pending occurrence blocks duplicate generation;
+    - completed history is preserved;
+    - dry-run is the default;
+    - no assignment emails are sent.
     """
 
     help = (
-        "Generate missed Checklist occurrences from ChecklistRecurringSeries. "
-        "Dry-run by default. Use --apply to persist."
+        "Generate missed Checklist occurrences from "
+        "ChecklistRecurringSeries. Dry-run by default. "
+        "Use --apply to persist changes."
     )
 
     def add_arguments(self, parser):
@@ -33,21 +43,30 @@ class Command(BaseCommand):
             default=None,
             help="Limit processing to one assignee user ID.",
         )
+
         parser.add_argument(
             "--apply",
             action="store_true",
-            help="Persist changes. Without this flag the command is read-only.",
+            help=(
+                "Persist generated Checklist occurrences. "
+                "Without this flag the command is read-only."
+            ),
         )
+
         parser.add_argument(
             "--limit",
             type=int,
             default=1000,
-            help="Maximum number of active series to inspect. Default: 1000.",
+            help=(
+                "Maximum number of active recurring-series masters "
+                "to inspect. Default: 1000."
+            ),
         )
+
         parser.add_argument(
             "--show-details",
             action="store_true",
-            help="Print one JSON result line per processed series.",
+            help="Print one JSON result line for every processed series.",
         )
 
     def handle(self, *args, **options):
@@ -59,23 +78,30 @@ class Command(BaseCommand):
         try:
             limit = int(options.get("limit") or 1000)
         except (TypeError, ValueError) as exc:
-            raise CommandError("--limit must be an integer.") from exc
+            raise CommandError(
+                "--limit must be a valid integer."
+            ) from exc
 
         if limit < 1:
-            raise CommandError("--limit must be greater than zero.")
+            raise CommandError(
+                "--limit must be greater than zero."
+            )
 
+        self.stdout.write("")
         self.stdout.write(
             self.style.MIGRATE_HEADING(
-                "Missed ChecklistRecurringSeries generation"
+                "Missed Checklist recurring-series generation"
             )
         )
+
         self.stdout.write(
-            f"Mode      : {'APPLY' if apply_changes else 'DRY-RUN'}"
+            f"Mode        : {'APPLY' if apply_changes else 'DRY-RUN'}"
         )
         self.stdout.write(
-            f"User ID   : {user_id if user_id is not None else 'ALL'}"
+            f"User ID     : "
+            f"{user_id if user_id is not None else 'ALL'}"
         )
-        self.stdout.write(f"Limit     : {limit}")
+        self.stdout.write(f"Series limit: {limit}")
         self.stdout.write("")
 
         try:
@@ -84,6 +110,7 @@ class Command(BaseCommand):
                 dry_run=dry_run,
                 limit=limit,
             )
+
         except Exception as exc:
             logger.exception(
                 "generate_missed_recurrences failed: "
@@ -92,56 +119,119 @@ class Command(BaseCommand):
                 dry_run,
                 limit,
             )
+
             raise CommandError(
-                f"Missed recurrence generation failed: "
+                "Missed recurrence generation failed: "
                 f"{type(exc).__name__}: {exc}"
             ) from exc
 
-        rows = result.get("results") or []
+        checked = int(result.get("checked") or 0)
+        created = int(result.get("created") or 0)
 
-        if show_details:
-            for row in rows:
+        rows: list[dict[str, Any]] = list(
+            result.get("results") or []
+        )
+
+        reason_counts: dict[str, int] = {}
+
+        for row in rows:
+            reason = str(row.get("reason") or "unknown")
+            reason_counts[reason] = (
+                reason_counts.get(reason, 0) + 1
+            )
+
+            if show_details:
                 self.stdout.write(
                     json.dumps(
                         {
                             "series_id": row.get("series_id"),
                             "created": bool(row.get("created")),
-                            "occurrence_id": row.get("occurrence_id"),
-                            "planned_date": row.get("planned_date"),
-                            "reason": row.get("reason"),
+                            "occurrence_id": row.get(
+                                "occurrence_id"
+                            ),
+                            "planned_date": row.get(
+                                "planned_date"
+                            ),
+                            "reason": reason,
+                            "skipped_steps": int(
+                                row.get("skipped_steps") or 0
+                            ),
                         },
                         default=str,
                         sort_keys=True,
                     )
                 )
 
-        checked = int(result.get("checked") or 0)
-        created = int(result.get("created") or 0)
         would_create = sum(
             1
             for row in rows
             if row.get("reason") == "dry_run_would_create"
         )
 
-        self.stdout.write("")
-        self.stdout.write(f"Series checked : {checked}")
-        self.stdout.write(
-            f"{'Would create' if dry_run else 'Created'}      : "
-            f"{would_create if dry_run else created}"
+        errors = sum(
+            count
+            for reason, count in reason_counts.items()
+            if reason.startswith("error:")
         )
+
+        self.stdout.write("")
+        self.stdout.write("Summary")
+        self.stdout.write("-" * 72)
+        self.stdout.write(f"Series checked : {checked}")
+
+        if dry_run:
+            self.stdout.write(
+                f"Would create   : {would_create}"
+            )
+        else:
+            self.stdout.write(
+                f"Created        : {created}"
+            )
+
+        self.stdout.write(f"Errors         : {errors}")
+
+        if reason_counts:
+            self.stdout.write("")
+            self.stdout.write("Result counts")
+            self.stdout.write("-" * 72)
+
+            for reason in sorted(reason_counts):
+                self.stdout.write(
+                    f"{reason:<48} {reason_counts[reason]}"
+                )
+
+        self.stdout.write("")
+
+        if errors:
+            self.stdout.write(
+                self.style.ERROR(
+                    f"The generator reported {errors} error result(s). "
+                    "Review the details before running with --apply."
+                )
+            )
 
         if dry_run:
             self.stdout.write(
                 self.style.WARNING(
-                    "Dry-run complete. Re-run with --apply after review."
+                    "Dry-run complete. No Checklist rows or "
+                    "recurring-series records were modified."
                 )
             )
+
+            self.stdout.write(
+                "Re-run with --apply only after reviewing "
+                "the output."
+            )
+
         else:
             self.stdout.write(
                 self.style.SUCCESS(
-                    f"Missed recurrence run complete. "
+                    "Missed recurrence run complete. "
                     f"Created {created} occurrence(s)."
                 )
             )
 
-        return result
+        # Django management commands should return None or a string.
+        # Returning the result dictionary causes:
+        # AttributeError: 'dict' object has no attribute 'endswith'
+        return None

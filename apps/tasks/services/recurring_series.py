@@ -144,6 +144,11 @@ def create_occurrence_from_series(
             f"Recurring series {series.pk} is inactive or deleted."
         )
 
+    if not series.assign_to_id or not series.assign_to.is_active:
+        raise ValueError(
+            f"Recurring series {series.pk} has no active assignee."
+        )
+
     planned_dt = _aware(planned_dt)
 
     return Checklist.objects.create(
@@ -363,16 +368,14 @@ def generate_one_series(
     The series master is locked for the full decision and creation transaction.
     """
     try:
+        # Lock only the recurring-series master row.
+        #
+        # Do not use select_related() on this locked query. Nullable related
+        # user fields create outer joins, and PostgreSQL does not allow
+        # FOR UPDATE on the nullable side of an outer join.
         series = (
             ChecklistRecurringSeries.objects
             .select_for_update()
-            .select_related(
-                "assign_by",
-                "assign_to",
-                "assign_pc",
-                "notify_to",
-                "auditor",
-            )
             .get(pk=series_id)
         )
     except ChecklistRecurringSeries.DoesNotExist:
@@ -389,6 +392,29 @@ def generate_one_series(
             created=False,
             occurrence_id=None,
             reason="inactive_or_deleted",
+        )
+
+    # A recurring series assigned to a deactivated employee must never create
+    # another occurrence. Stop the master permanently when encountered.
+    if not series.assign_to_id or not series.assign_to.is_active:
+        if not dry_run:
+            series.is_active = False
+            series.is_deleted = True
+            series.next_run_at = None
+            series.save(
+                update_fields=[
+                    "is_active",
+                    "is_deleted",
+                    "next_run_at",
+                    "updated_at",
+                ]
+            )
+
+        return GenerationResult(
+            series_id=series.id,
+            created=False,
+            occurrence_id=None,
+            reason="inactive_assignee",
         )
 
     if _active_pending_exists(series):
@@ -531,6 +557,7 @@ def generate_due_series(
     queryset = ChecklistRecurringSeries.objects.filter(
         is_active=True,
         is_deleted=False,
+        assign_to__is_active=True,
     )
 
     if user_id:

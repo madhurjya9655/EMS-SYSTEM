@@ -192,16 +192,14 @@ def _materialize_one(
     anchor_10am: datetime,
     dry_run: bool,
 ) -> tuple[str, int | None]:
+    # Lock only the recurring-series row.
+    #
+    # Do not combine select_for_update() with select_related() here because
+    # several related user fields are nullable. PostgreSQL rejects FOR UPDATE
+    # when the query contains nullable outer joins.
     series = (
         ChecklistRecurringSeries.objects
         .select_for_update()
-        .select_related(
-            "assign_by",
-            "assign_to",
-            "assign_pc",
-            "notify_to",
-            "auditor",
-        )
         .get(pk=series_id)
     )
 
