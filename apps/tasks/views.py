@@ -1,4 +1,4 @@
-#D:\CLIENT PROJECT\employee management system bos\employee_management_system\apps\tasks\views.py
+# apps/tasks/views.py
 from __future__ import annotations
 
 import csv
@@ -389,6 +389,8 @@ def _void_checklist_entry(obj, *, deleted_by=None) -> int:
             pending_qs = Checklist.objects.filter(
                 recurring_series_id=locked.pk,
                 status="Pending",
+                is_deleted=False,
+                is_active=True,
             )
             return _soft_delete_occurrence_queryset(
                 pending_qs,
@@ -1478,6 +1480,25 @@ def list_checklist(request):
     if checklist_has_field("is_active"):
         base_qs = base_qs.filter(is_active=True)
 
+    # A completed Checklist occurrence is preserved as history when its
+    # recurring series is stopped. Such historical rows can still have
+    # is_active=True and is_deleted=False, so occurrence-level filtering alone
+    # is not enough for this master-configuration page.
+    #
+    # Show:
+    #   - one-time rows with no recurring master;
+    #   - rows whose recurring master is active and not deleted.
+    #
+    # Hide:
+    #   - every row belonging to a stopped/deleted recurring master.
+    base_qs = base_qs.filter(
+        Q(recurring_series__isnull=True)
+        | Q(
+            recurring_series__is_active=True,
+            recurring_series__is_deleted=False,
+        )
+    )
+
     # ------------------------------------------------------------------
     # Master-view filters
     # IMPORTANT: no status filter here.
@@ -1652,14 +1673,26 @@ def list_checklist_unique_series(request):
 
     qs = Checklist.objects.select_related("assign_to", "assign_by")
 
-    # Exclude true deleted rows when fields exist.
+    # Exclude deleted occurrence rows.
     if checklist_has_field("is_deleted"):
         qs = qs.filter(is_deleted=False)
     else:
-        # Current fallback: deleted/archive and leave/holiday skip are mixed.
-        # This is not perfect, but safest with the current schema.
         if checklist_has_field("is_skipped_due_to_leave"):
             qs = qs.filter(is_skipped_due_to_leave=False)
+
+    if checklist_has_field("is_active"):
+        qs = qs.filter(is_active=True)
+
+    # Completed history remains in Checklist after a recurring series is
+    # stopped. Exclude those historical rows from the active-series list by
+    # checking the recurring master as well as the occurrence row.
+    qs = qs.filter(
+        Q(recurring_series__isnull=True)
+        | Q(
+            recurring_series__is_active=True,
+            recurring_series__is_deleted=False,
+        )
+    )
 
     employee_id = (request.GET.get("assign_to") or "").strip()
     if employee_id:
