@@ -1,4 +1,4 @@
-# FILE: apps/tasks/models.py
+# apps/tasks/models.py
 # PURPOSE: Enforce non-working-day task assignment rules, leave-aware validation,
 #          and production-safe checklist lifecycle/delete architecture
 # UPDATED: 2026-05-08
@@ -147,11 +147,232 @@ def _is_on_leave_instant(user: User, dt) -> bool:
     return False
 
 
+
+# ---------------------------------------------------------------------------
+# Checklist recurring-series master
+# ---------------------------------------------------------------------------
+
+class ChecklistRecurringSeries(models.Model):
+    """
+    Durable source of truth for one recurring checklist definition.
+
+    Checklist rows are occurrences/history only. Disabling this master stops
+    future generation without modifying completed historical occurrences.
+    """
+
+    MODE_CHOICES = [
+        ("Daily", "Daily"),
+        ("Weekly", "Weekly"),
+        ("Monthly", "Monthly"),
+        ("Yearly", "Yearly"),
+    ]
+
+    assign_by = models.ForeignKey(
+        User,
+        on_delete=models.PROTECT,
+        related_name="checklist_series_created",
+    )
+    assign_to = models.ForeignKey(
+        User,
+        on_delete=models.PROTECT,
+        related_name="checklist_recurring_series",
+    )
+
+    task_name = models.CharField(max_length=200)
+    message = models.TextField(blank=True)
+
+    mode = models.CharField(max_length=10, choices=MODE_CHOICES)
+    frequency = models.PositiveIntegerField(default=1)
+    group_name = models.CharField(max_length=100, blank=True)
+
+    first_planned_date = models.DateTimeField()
+    next_run_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    recurrence_end_date = models.DateField(null=True, blank=True)
+
+    priority = models.CharField(
+        max_length=10,
+        choices=[
+            ("Low", "Low"),
+            ("Medium", "Medium"),
+            ("High", "High"),
+        ],
+        default="Low",
+    )
+    attachment_mandatory = models.BooleanField(default=False)
+    time_per_task_minutes = models.PositiveIntegerField(default=0)
+    remind_before_days = models.PositiveIntegerField(default=0)
+
+    assign_pc = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="pc_checklist_series",
+    )
+    notify_to = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="notify_checklist_series",
+    )
+    auditor = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="audit_checklist_series",
+    )
+
+    set_reminder = models.BooleanField(default=False)
+    reminder_mode = models.CharField(
+        max_length=10,
+        choices=MODE_CHOICES,
+        blank=True,
+        null=True,
+    )
+    reminder_frequency = models.PositiveIntegerField(default=1, blank=True, null=True)
+    reminder_starting_time = models.TimeField(blank=True, null=True)
+
+    checklist_auto_close = models.BooleanField(default=False)
+    checklist_auto_close_days = models.PositiveIntegerField(default=0)
+
+    is_active = models.BooleanField(default=True, db_index=True)
+    is_deleted = models.BooleanField(default=False, db_index=True)
+
+    deleted_at = models.DateTimeField(null=True, blank=True)
+    deleted_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="deleted_checklist_series",
+    )
+    delete_reason = models.CharField(max_length=255, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=[
+                    "assign_to",
+                    "task_name",
+                    "mode",
+                    "frequency",
+                    "group_name",
+                ],
+                condition=models.Q(is_deleted=False),
+                name="uniq_live_checklist_series",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(frequency__gte=1),
+                name="checklist_series_frequency_gte_1",
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=["is_active", "is_deleted", "next_run_at"],
+                name="cl_series_due_idx",
+            ),
+            models.Index(
+                fields=["assign_to", "task_name"],
+                name="cl_series_owner_name_idx",
+            ),
+        ]
+
+    def clean(self):
+        super().clean()
+
+        self.frequency = max(int(self.frequency or 1), 1)
+        self.group_name = (self.group_name or "").strip()
+
+        validate_first_window = self._state.adding
+
+        if not self._state.adding and self.pk:
+            try:
+                previous = type(self).objects.only(
+                    "assign_to_id",
+                    "first_planned_date",
+                ).get(pk=self.pk)
+                validate_first_window = (
+                    previous.assign_to_id != self.assign_to_id
+                    or previous.first_planned_date != self.first_planned_date
+                )
+            except type(self).DoesNotExist:
+                validate_first_window = True
+
+        if validate_first_window and self.first_planned_date:
+            _validate_non_working_day(
+                self.first_planned_date,
+                label="recurring checklist",
+            )
+
+        if validate_first_window and self.assign_to_id and self.first_planned_date:
+            if _is_on_leave_instant(self.assign_to, self.first_planned_date):
+                raise ValidationError(
+                    "Assignee is on leave during the first planned window."
+                )
+
+        if self.recurrence_end_date and self.first_planned_date:
+            first_date = (
+                timezone.localtime(self.first_planned_date).date()
+                if timezone.is_aware(self.first_planned_date)
+                else self.first_planned_date.date()
+            )
+            if self.recurrence_end_date < first_date:
+                raise ValidationError(
+                    "Recurrence end date cannot be before the first planned date."
+                )
+
+    def save(self, *args, **kwargs):
+        self.frequency = max(int(self.frequency or 1), 1)
+        self.group_name = (self.group_name or "").strip()
+        self.full_clean()
+        super().save(*args, **kwargs)
+
+    def soft_delete(self, *, user=None, reason=""):
+        self.is_active = False
+        self.is_deleted = True
+        self.next_run_at = None
+        self.deleted_at = timezone.now()
+        self.deleted_by = user
+        self.delete_reason = (
+            reason or "Recurring checklist series permanently stopped"
+        )[:255]
+        self.save(
+            update_fields=[
+                "is_active",
+                "is_deleted",
+                "next_run_at",
+                "deleted_at",
+                "deleted_by",
+                "delete_reason",
+                "updated_at",
+            ]
+        )
+
+    def __str__(self):
+        return (
+            f"{self.task_name} → {self.assign_to} "
+            f"({self.mode} every {self.frequency})"
+        )
+
+
 # ---------------------------------------------------------------------------
 # Checklist
 # ---------------------------------------------------------------------------
 
 class Checklist(models.Model):
+    recurring_series = models.ForeignKey(
+        "ChecklistRecurringSeries",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="instances",
+        help_text="Recurring master that generated this occurrence.",
+    )
     assign_by = models.ForeignKey(
         User,
         on_delete=models.CASCADE,
@@ -305,6 +526,7 @@ class Checklist(models.Model):
     class Meta:
         indexes = [
             models.Index(fields=["assign_to", "task_name", "mode", "frequency", "group_name"]),
+            models.Index(fields=["recurring_series", "status", "planned_date"]),
             models.Index(fields=["assign_to", "status", "planned_date"]),
             models.Index(fields=["status", "planned_date"]),
             models.Index(fields=["is_skipped_due_to_leave", "planned_date"]),

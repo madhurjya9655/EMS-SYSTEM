@@ -1,116 +1,120 @@
 # apps/tasks/management/commands/ensure_recurring_next.py
 from __future__ import annotations
 
+import json
 import logging
-import pytz
-from django.core.management.base import BaseCommand
-from django.db import transaction
-from django.utils import timezone
 
-from apps.tasks.models import Checklist
-from apps.tasks.recurrence import get_next_planned_date, RECURRING_MODES
+from django.core.management.base import BaseCommand, CommandError
+
+from apps.tasks.services.recurring_series import generate_due_series
+
 
 logger = logging.getLogger(__name__)
-IST = pytz.timezone("Asia/Kolkata")
 
 
 class Command(BaseCommand):
     help = (
-        "Ensure each recurring Checklist series has exactly ONE future Pending occurrence. "
-        "Next is always scheduled at 19:00 IST on a working day (Sun/holiday -> next working day). "
-        "Incomplete past tasks DO NOT block generating the next."
+        "Compatibility command for generating Checklist occurrences from "
+        "ChecklistRecurringSeries. Legacy Checklist-row inference is disabled."
     )
 
     def add_arguments(self, parser):
-        parser.add_argument("--user-id", type=int, help="Limit to specific assignee id.")
-        parser.add_argument("--dry-run", action="store_true")
-
-    def handle(self, *args, **opts):
-        user_id = opts.get("user_id")
-        dry = bool(opts.get("dry_run"))
-        now = timezone.now()
-
-        filters = {"mode__in": RECURRING_MODES, "frequency__gte": 1}
-        if user_id:
-            filters["assign_to_id"] = user_id
-
-        seeds = (
-            Checklist.objects.filter(**filters)
-            .values("assign_to_id", "task_name", "mode", "frequency", "group_name")
-            .distinct()
+        parser.add_argument(
+            "--user-id",
+            type=int,
+            default=None,
+            help="Limit processing to one assignee user ID.",
         )
 
-        created = 0
-        for s in seeds:
-            series_key = dict(
-                assign_to_id=s["assign_to_id"],
-                task_name=s["task_name"],
-                mode=s["mode"],
-                frequency=s["frequency"],
-                group_name=s["group_name"],
+        parser.add_argument(
+            "--dry-run",
+            action="store_true",
+            help="Show actions without modifying the database.",
+        )
+
+        parser.add_argument(
+            "--limit",
+            type=int,
+            default=1000,
+            help="Maximum number of active series to inspect.",
+        )
+
+        parser.add_argument(
+            "--show-details",
+            action="store_true",
+            help="Print one JSON result per processed series.",
+        )
+
+    def handle(self, *args, **options):
+        user_id = options.get("user_id")
+        dry_run = bool(options.get("dry_run"))
+        show_details = bool(options.get("show_details"))
+
+        try:
+            limit = int(options.get("limit") or 1000)
+        except (TypeError, ValueError) as exc:
+            raise CommandError("--limit must be an integer.") from exc
+
+        if limit < 1:
+            raise CommandError("--limit must be greater than zero.")
+
+        try:
+            result = generate_due_series(
+                user_id=user_id,
+                dry_run=dry_run,
+                limit=limit,
             )
-
-            latest = (
-                Checklist.objects.filter(**series_key)
-                .order_by("-planned_date", "-id")
-                .first()
+        except Exception as exc:
+            logger.exception(
+                "ensure_recurring_next failed: "
+                "user_id=%s dry_run=%s limit=%s",
+                user_id,
+                dry_run,
+                limit,
             )
-            if not latest:
-                continue
+            raise CommandError(
+                f"Generation failed: {type(exc).__name__}: {exc}"
+            ) from exc
 
-            # If a future Pending exists, do nothing (we only ever keep one)
-            if Checklist.objects.filter(status="Pending", planned_date__gt=now, **series_key).exists():
-                continue
+        rows = result.get("results") or []
 
-            # Compute next at 19:00 IST on a working day; hop forward until strictly > now
-            next_dt = get_next_planned_date(latest.planned_date, latest.mode, latest.frequency or 1)
-            hops = 0
-            while next_dt and next_dt <= now and hops < 730:
-                next_dt = get_next_planned_date(next_dt, latest.mode, latest.frequency or 1)
-                hops += 1
-            if not next_dt:
-                continue
-
-            if dry:
-                created += 1
+        if show_details:
+            for row in rows:
                 self.stdout.write(
-                    f"[DRY RUN] Would create '{latest.task_name}' for user_id={s['assign_to_id']} at {next_dt.astimezone(IST):%Y-%m-%d %H:%M IST}"
-                )
-                continue
-
-            try:
-                with transaction.atomic():
-                    Checklist.objects.create(
-                        assign_by=latest.assign_by,
-                        task_name=latest.task_name,
-                        message=latest.message,
-                        assign_to=latest.assign_to,
-                        planned_date=next_dt,
-                        priority=latest.priority,
-                        attachment_mandatory=latest.attachment_mandatory,
-                        mode=latest.mode,
-                        frequency=latest.frequency,
-                        recurrence_end_date=getattr(latest, "recurrence_end_date", None),
-                        time_per_task_minutes=latest.time_per_task_minutes,
-                        remind_before_days=latest.remind_before_days,
-                        assign_pc=latest.assign_pc,
-                        notify_to=latest.notify_to,
-                        auditor=getattr(latest, "auditor", None),
-                        set_reminder=latest.set_reminder,
-                        reminder_mode=latest.reminder_mode,
-                        reminder_frequency=latest.reminder_frequency,
-                        reminder_starting_time=latest.reminder_starting_time,
-                        checklist_auto_close=latest.checklist_auto_close,
-                        checklist_auto_close_days=latest.checklist_auto_close_days,
-                        group_name=getattr(latest, "group_name", None),
-                        actual_duration_minutes=0,
-                        status="Pending",
+                    json.dumps(
+                        {
+                            "series_id": row.get("series_id"),
+                            "created": bool(row.get("created")),
+                            "occurrence_id": row.get("occurrence_id"),
+                            "planned_date": row.get("planned_date"),
+                            "reason": row.get("reason"),
+                        },
+                        default=str,
+                        sort_keys=True,
                     )
-                created += 1
-            except Exception as e:
-                logger.exception("Failed to create next occurrence for %s: %s", series_key, e)
+                )
 
-        if dry:
-            self.stdout.write(self.style.WARNING(f"[DRY RUN] Would create {created} task(s)"))
+        checked = int(result.get("checked") or 0)
+        created = int(result.get("created") or 0)
+        would_create = sum(
+            1
+            for row in rows
+            if row.get("reason") == "dry_run_would_create"
+        )
+
+        self.stdout.write(f"Series checked: {checked}")
+
+        if dry_run:
+            self.stdout.write(
+                self.style.WARNING(
+                    f"Dry-run complete. Would create {would_create} occurrence(s)."
+                )
+            )
         else:
-            self.stdout.write(self.style.SUCCESS(f"Created {created} task(s)"))
+            self.stdout.write(
+                self.style.SUCCESS(
+                    f"Created {created} occurrence(s)."
+                )
+            )
+
+        return result

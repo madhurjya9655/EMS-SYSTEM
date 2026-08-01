@@ -21,9 +21,9 @@ from apps.tasks.services.weekly_performance import (
     upsert_weekly_scores_for_last_week,
 )
 
-# Celery tasks & orchestrators (existing core)
+# Celery tasks and orchestrators
 from apps.tasks.tasks import (
-    generate_recurring_checklists,    # ensure future rows exist (not today)
+    generate_recurring_checklists,    # master-based recurring generator
     send_due_today_assignments,       # 10:00 IST fan-out (leave aware; centrally locked)
     pre10am_unblock_and_generate,     # 09:55 IST safeguard
 )
@@ -318,7 +318,9 @@ def pre10am_unblock_and_generate_hook(request, token: str = ""):
       1) Complete overdue daily 'Pending' rows (yesterday or earlier)
       2) Generate 'future' recurring rows
 
-    Opportunistically materializes “today” rows before the legacy pre10 step.
+    The pre10 orchestrator owns materialization and generation. This endpoint
+    must not invoke the materializer separately, otherwise the same pipeline is
+    executed twice.
     """
     try:
         if not _cron_authorized(request, token):
@@ -330,16 +332,6 @@ def pre10am_unblock_and_generate_hook(request, token: str = ""):
         except Exception:
             uid = None
 
-        mat = {}
-        try:
-            if callable(materialize_today_for_all):
-                mat_res = materialize_today_for_all(user_id=uid, dry_run=False)
-                mat = getattr(mat_res, "as_dict", lambda: getattr(mat_res, "__dict__", {}))()
-            else:
-                mat = {"skipped": True, "reason": "materializer_unavailable"}
-        except Exception:
-            mat = {"created": 0, "error": "materializer_failed"}
-
         result = pre10am_unblock_and_generate(user_id=uid)
 
         return JsonResponse(
@@ -347,7 +339,6 @@ def pre10am_unblock_and_generate_hook(request, token: str = ""):
                 "ok": True,
                 "method": request.method,
                 "at": timezone.now().isoformat(),
-                "materialize_today": mat,
                 **(result or {}),
             }
         )

@@ -2,435 +2,403 @@
 from __future__ import annotations
 
 """
-Today-only materializer for recurring tasks.
+Today-only ChecklistRecurringSeries materializer.
 
-This module fills ONLY the gap:
-  • At (or just before) 10:00 IST, create the *missing* "today" row
-    for each recurring series that *should* have one today.
-  • It never creates future rows (generator keeps doing that).
-  • It never emails (the 10:00 mailer will pick up after creation).
-  • It respects leave/anchor rules (skips users blocked at 10:00 IST).
-  • It is idempotent and extremely defensive against duplicates.
-  • It never runs on Sundays or admin-configured holidays.
+At or before the 10:00 IST notification run, this module creates a missing
+Checklist occurrence whose calculated due date is today at 19:00 IST.
 
-PRODUCTION SAFETY (critical)
-----------------------------
-To prevent "delete-today → materializer recreates today again" incidents,
-we persist a per-series-per-day marker (CACHED, cross-process).
-Once a series is materialized for a day, it will NOT be re-materialized that day,
-even if a user deletes the row later.
-
-Safe to call multiple times per day.
+It uses ChecklistRecurringSeries as the only recurrence source of truth.
+It never infers a series from Checklist task-name/frequency fields.
 """
 
-import hashlib
+import logging
+from dataclasses import dataclass, field
 from datetime import datetime, time as dt_time, timedelta
-from typing import Dict, List, Any
+from typing import Any
 
 import pytz
 from django.conf import settings
 from django.core.cache import cache
 from django.db import transaction
-from django.db.models import Q
 from django.utils import timezone
 
-from .models import Checklist
-from .recurrence_utils import (
-    RECURRING_MODES,
-    normalize_mode,
-    get_next_planned_date,  # pins to 19:00 IST for stepped date
-    is_working_day,         # Sunday=False, Holiday=False
+from apps.tasks.models import Checklist, ChecklistRecurringSeries
+from apps.tasks.recurrence_utils import is_working_day
+from apps.tasks.services.blocking import guard_assign
+from apps.tasks.services.recurring_series import (
+    calculate_next_run,
+    create_occurrence_from_series,
 )
-from .utils import _safe_console_text
-from apps.tasks.services.blocking import guard_assign  # single source of truth
-from apps.tasks.services.checklist_lifecycle import (
-    active_occurrences,
-    apply_new_occurrence_lifecycle_defaults,
-    recurring_series_q,
-    series_is_permanently_deleted,
-)
+from apps.tasks.utils import _safe_console_text
 
+
+logger = logging.getLogger(__name__)
 IST = pytz.timezone(getattr(settings, "TIME_ZONE", "Asia/Kolkata"))
 
 
-# -----------------------------------------------------------------------------
-# Cache marker helpers (replaces filesystem marker files)
-# -----------------------------------------------------------------------------
 def _now_ist() -> datetime:
     return timezone.now().astimezone(IST)
 
 
 def _ttl_until_next_3am_ist(now_ist: datetime | None = None) -> int:
-    n = now_ist or _now_ist()
-    next3 = (n + timedelta(days=1)).replace(hour=3, minute=0, second=0, microsecond=0)
-    return max(int((next3 - n).total_seconds()), 60)
+    current = now_ist or _now_ist()
+    next_3am = (current + timedelta(days=1)).replace(
+        hour=3,
+        minute=0,
+        second=0,
+        microsecond=0,
+    )
+    return max(int((next_3am - current).total_seconds()), 60)
 
 
-def _marker_cache_key(day_iso: str, series_hash: str) -> str:
-    return f"mat:today_series_done:{day_iso}:{series_hash}"
+def _marker_key(day_iso: str, series_id: int) -> str:
+    return f"mat:checklist_series:{series_id}:{day_iso}"
 
 
-def _acquire_day_series_marker(day_iso: str, series_hash: str, *, now_ist: datetime | None = None) -> str | None:
-    """
-    Cross-process guard via cache.add (atomic):
-      - If marker already exists => series already materialized today (or being materialized).
-      - If acquired => KEEP it for the day to prevent resurrection after delete.
-
-    Returns the key if acquired, else None.
-    """
+def _acquire_marker(
+    day_iso: str,
+    series_id: int,
+    *,
+    now_ist: datetime,
+) -> str | None:
+    key = _marker_key(day_iso, series_id)
     ttl = max(_ttl_until_next_3am_ist(now_ist), 6 * 60 * 60)
-    key = _marker_cache_key(day_iso, series_hash)
+
     try:
-        if cache.add(key, True, ttl):
-            return key
-        return None
+        return key if cache.add(key, True, ttl) else None
     except Exception:
+        # Continue best-effort when cache is unavailable. Database locking and
+        # duplicate checks still protect the create.
         return "NOLOCK"
 
 
-def _release_marker(lock_key: str | None) -> None:
-    """
-    Only used on failure to allow retry (do NOT remove marker on success).
-    If cache is down ("NOLOCK"), no-op.
-    """
+def _release_marker(key: str | None) -> None:
+    if not key or key == "NOLOCK":
+        return
+
     try:
-        if lock_key and lock_key not in ("NOLOCK",):
-            cache.delete(lock_key)
+        cache.delete(key)
     except Exception:
         pass
 
 
-# -----------------------------------------------------------------------------
-# Core helpers
-# -----------------------------------------------------------------------------
-def _assignment_anchor_for_today_10am_ist(now_ist: datetime | None = None) -> datetime:
-    n = (now_ist or _now_ist())
-    return IST.localize(datetime.combine(n.date(), dt_time(10, 0)))
+def _anchor_10am_ist(day) -> datetime:
+    return IST.localize(datetime.combine(day, dt_time(10, 0)))
 
 
-def _series_identity_hash(*, uid: int, task_name: str, mode: str, freq_norm: int, group_name: str | None) -> str:
-    raw = f"{uid}|{task_name}|{mode}|{freq_norm}|{group_name or ''}"
-    return hashlib.sha1(raw.encode("utf-8", errors="replace")).hexdigest()
-
-
-def _series_q_tolerant(assign_to_id: int, task_name: str, mode: str, freq_norm: int, group_name: str | None):
-    return recurring_series_q(
-        assign_to_id=assign_to_id,
-        task_name=task_name,
-        mode=mode,
-        frequency=freq_norm,
-        group_name=group_name,
-    )
-
-
-def _today_row_exists(q_series) -> bool:
-    """
-    Does a *today-due* item already exist in this tolerant series?
-
-    IMPORTANT:
-      - We consider *any* row (Pending/Completed, skipped/not skipped) as "exists"
-        for idempotency. If today's row was voided (is_skipped_due_to_leave=True),
-        we MUST NOT recreate it.
-    """
-    today_ist = _now_ist().date()
-    pinned_19 = IST.localize(datetime.combine(today_ist, dt_time(19, 0)))
-
-    try:
-        exists_by_date = Checklist.objects.filter(q_series).filter(planned_date__date=today_ist).exists()
-    except Exception:
-        exists_by_date = False
-
-    try:
-        exists_by_pin = Checklist.objects.filter(q_series).filter(
-            planned_date__gte=pinned_19 - timedelta(minutes=1),
-            planned_date__lt=pinned_19 + timedelta(minutes=1),
-        ).exists()
-    except Exception:
-        exists_by_pin = False
-
-    return bool(exists_by_date or exists_by_pin)
-
-
-def _future_pending_exists(q_series) -> bool:
-    """
-    Defensive: if a future Pending exists in the series (including skipped ones),
-    do not create another "today" row.
-    """
-    try:
-        return (
-            Checklist.objects.filter(status="Pending")
-            .filter(q_series)
-            .filter(planned_date__gt=timezone.now())
-            .exists()
+def _to_ist(value: datetime) -> datetime:
+    if timezone.is_naive(value):
+        value = timezone.make_aware(
+            value,
+            timezone.get_current_timezone(),
         )
-    except Exception:
-        return False
+    return value.astimezone(IST)
 
 
-def _resolve_next_after_completed(latest_completed_dt: datetime | None, mode: str, freq: int) -> datetime | None:
-    if not latest_completed_dt:
-        return None
-    nxt = get_next_planned_date(latest_completed_dt, mode, freq)
-    safety = 0
-    now = timezone.now()
-    while nxt and nxt < now and safety < 730:
-        nxt = get_next_planned_date(nxt, mode, freq)
-        safety += 1
-    return nxt
-
-
-def _create_today_from_completed(completed_obj: Checklist, next_dt: datetime, freq_norm: int) -> Checklist:
-    """
-    Create a "today" row by cloning fields from the latest completed occurrence.
-    NOTE: Emails are NOT sent here. The 10:00 AM mailer will handle notifications.
-    """
-    data = apply_new_occurrence_lifecycle_defaults({
-        "assign_by": completed_obj.assign_by,
-        "task_name": completed_obj.task_name,
-        "message": completed_obj.message,
-        "assign_to": completed_obj.assign_to,
-        "planned_date": next_dt,
-        "priority": completed_obj.priority,
-        "attachment_mandatory": completed_obj.attachment_mandatory,
-        "mode": completed_obj.mode,
-        "frequency": freq_norm,
-        "time_per_task_minutes": completed_obj.time_per_task_minutes,
-        "remind_before_days": completed_obj.remind_before_days,
-        "assign_pc": completed_obj.assign_pc,
-        "notify_to": completed_obj.notify_to,
-        "auditor": getattr(completed_obj, "auditor", None),
-        "set_reminder": completed_obj.set_reminder,
-        "reminder_mode": completed_obj.reminder_mode,
-        "reminder_frequency": completed_obj.reminder_frequency,
-        "reminder_starting_time": completed_obj.reminder_starting_time,
-        "checklist_auto_close": completed_obj.checklist_auto_close,
-        "checklist_auto_close_days": completed_obj.checklist_auto_close_days,
-        "group_name": getattr(completed_obj, "group_name", None),
-        "actual_duration_minutes": 0,
-        "status": "Pending",
-    })
-    with transaction.atomic():
-        obj = Checklist.objects.create(**data)
-    return obj
-
-
+@dataclass
 class MaterializeResult:
-    def __init__(self):
-        self.created: int = 0
-        self.skipped_leave: int = 0
-        self.skipped_exists: int = 0
-        self.skipped_no_completed: int = 0
-        self.skipped_not_today: int = 0
-        self.skipped_future_pending: int = 0
-        self.skipped_marker_exists: int = 0
-        self.skipped_non_working_day: int = 0
-        self.per_user: Dict[int, int] = {}
-        self.details: List[Dict[str, Any]] = []
+    created: int = 0
+    skipped_non_working_day: int = 0
+    skipped_inactive: int = 0
+    skipped_pending_exists: int = 0
+    skipped_no_completed: int = 0
+    skipped_not_today: int = 0
+    skipped_leave: int = 0
+    skipped_duplicate: int = 0
+    skipped_marker_exists: int = 0
+    failed: int = 0
+    per_user: dict[int, int] = field(default_factory=dict)
+    details: list[dict[str, Any]] = field(default_factory=list)
 
-    def add(self, user_id: int, obj_id: int | None, note: str):
-        if obj_id:
-            self.per_user[user_id] = self.per_user.get(user_id, 0) + 1
-        self.details.append({"user_id": user_id, "created_id": obj_id, "note": note})
+    def add(
+        self,
+        *,
+        series: ChecklistRecurringSeries,
+        note: str,
+        occurrence_id: int | None = None,
+    ) -> None:
+        if occurrence_id:
+            self.per_user[series.assign_to_id] = (
+                self.per_user.get(series.assign_to_id, 0) + 1
+            )
 
-    def as_dict(self) -> Dict[str, Any]:
+        if len(self.details) < 100:
+            self.details.append(
+                {
+                    "series_id": series.id,
+                    "assign_to_id": series.assign_to_id,
+                    "task_name": series.task_name,
+                    "occurrence_id": occurrence_id,
+                    "note": note,
+                }
+            )
+
+    def as_dict(self) -> dict[str, Any]:
         return {
             "created": self.created,
-            "skipped_leave": self.skipped_leave,
-            "skipped_exists": self.skipped_exists,
+            "skipped_non_working_day": self.skipped_non_working_day,
+            "skipped_inactive": self.skipped_inactive,
+            "skipped_pending_exists": self.skipped_pending_exists,
             "skipped_no_completed": self.skipped_no_completed,
             "skipped_not_today": self.skipped_not_today,
-            "skipped_future_pending": self.skipped_future_pending,
+            "skipped_leave": self.skipped_leave,
+            "skipped_duplicate": self.skipped_duplicate,
             "skipped_marker_exists": self.skipped_marker_exists,
-            "skipped_non_working_day": self.skipped_non_working_day,
+            "failed": self.failed,
             "per_user": self.per_user,
-            "details": self.details[:100],
+            "details": self.details,
         }
 
 
-def materialize_today_for_all(*, user_id: int | None = None, dry_run: bool = False) -> MaterializeResult:
-    """
-    Create missing "today" rows (19:00 IST due) for recurring series that have
-    their next occurrence scheduled for *today*.
+def _active_pending_exists(series: ChecklistRecurringSeries) -> bool:
+    return Checklist.objects.filter(
+        recurring_series=series,
+        status="Pending",
+        is_deleted=False,
+        is_active=True,
+        is_skipped_due_to_leave=False,
+    ).exists()
 
-    Guards:
-      • Skip entirely on Sundays and admin-configured holidays.
-      • Skip if a today-row already exists (strong idempotency).
-      • Skip if the assignee is blocked at 10:00 IST (leave-aware).
-      • Requires at least one COMPLETED occurrence to compute the next step.
-      • No emails are sent here.
 
-    CRITICAL SAFETY:
-      • Uses a per-series-per-day cache marker to avoid same-day resurrection.
-        If today's row gets deleted after creation, we still do NOT recreate it again today.
-    """
-    res = MaterializeResult()
+def _latest_completed(
+    series: ChecklistRecurringSeries,
+) -> Checklist | None:
+    return (
+        Checklist.objects
+        .filter(
+            recurring_series=series,
+            status="Completed",
+            is_deleted=False,
+            is_active=True,
+            is_skipped_due_to_leave=False,
+        )
+        .order_by("-planned_date", "-id")
+        .first()
+    )
+
+
+def _candidate_for_today(
+    series: ChecklistRecurringSeries,
+    completed: Checklist,
+) -> datetime | None:
+    return calculate_next_run(series, completed.planned_date)
+
+
+@transaction.atomic
+def _materialize_one(
+    *,
+    series_id: int,
+    today_ist,
+    anchor_10am: datetime,
+    dry_run: bool,
+) -> tuple[str, int | None]:
+    series = (
+        ChecklistRecurringSeries.objects
+        .select_for_update()
+        .select_related(
+            "assign_by",
+            "assign_to",
+            "assign_pc",
+            "notify_to",
+            "auditor",
+        )
+        .get(pk=series_id)
+    )
+
+    if series.is_deleted or not series.is_active:
+        return "inactive_or_deleted", None
+
+    if _active_pending_exists(series):
+        return "pending_exists", None
+
+    completed = _latest_completed(series)
+    if completed is None or completed.planned_date is None:
+        return "no_completed_source", None
+
+    candidate = _candidate_for_today(series, completed)
+    if candidate is None:
+        series.is_active = False
+        series.next_run_at = None
+        if not dry_run:
+            series.save(
+                update_fields=[
+                    "is_active",
+                    "next_run_at",
+                    "updated_at",
+                ]
+            )
+        return "recurrence_finished", None
+
+    if _to_ist(candidate).date() != today_ist:
+        return "not_today", None
+
+    try:
+        allowed = bool(guard_assign(series.assign_to, anchor_10am))
+    except Exception:
+        logger.exception(
+            "Materializer leave guard failed for series_id=%s",
+            series.id,
+        )
+        allowed = False
+
+    if not allowed:
+        if not dry_run:
+            series.next_run_at = calculate_next_run(series, candidate)
+            if series.next_run_at is None:
+                series.is_active = False
+            series.save(
+                update_fields=[
+                    "next_run_at",
+                    "is_active",
+                    "updated_at",
+                ]
+            )
+        return "leave_blocked", None
+
+    if Checklist.objects.filter(
+        recurring_series=series,
+        planned_date=candidate,
+    ).exists():
+        if not dry_run:
+            series.next_run_at = calculate_next_run(series, candidate)
+            if series.next_run_at is None:
+                series.is_active = False
+            series.save(
+                update_fields=[
+                    "next_run_at",
+                    "is_active",
+                    "updated_at",
+                ]
+            )
+        return "duplicate", None
+
+    if dry_run:
+        return "dry_run_would_create", None
+
+    occurrence = create_occurrence_from_series(series, candidate)
+
+    series.next_run_at = calculate_next_run(series, candidate)
+    if series.next_run_at is None:
+        series.is_active = False
+    series.save(
+        update_fields=[
+            "next_run_at",
+            "is_active",
+            "updated_at",
+        ]
+    )
+
+    return "created", occurrence.id
+
+
+def materialize_today_for_all(
+    *,
+    user_id: int | None = None,
+    dry_run: bool = False,
+    limit: int = 1000,
+) -> MaterializeResult:
+    result = MaterializeResult()
     now_ist = _now_ist()
     today_ist = now_ist.date()
     day_iso = today_ist.isoformat()
-    anchor10 = _assignment_anchor_for_today_10am_ist(now_ist)
 
-    # -------------------------------------------------------------------------
-    # FIX (Issue 1 – Gap B): never materialise recurring rows on Sundays or
-    # admin-configured holidays.  recurrence_utils.get_next_planned_date()
-    # intentionally never shifts; this call-site enforces the working-day rule.
-    # -------------------------------------------------------------------------
     if not is_working_day(today_ist):
-        import logging as _logging
-        _logging.getLogger(__name__).info(
+        result.skipped_non_working_day = 1
+        logger.info(
             _safe_console_text(
-                f"[TODAY MAT] Skipping: {day_iso} is a non-working day (Sunday or holiday)"
+                f"[TODAY MAT] Skipped {day_iso}: Sunday or configured holiday"
             )
         )
-        res.skipped_non_working_day = 1  # sentinel so callers can distinguish
-        return res
+        return result
 
-    filters = {"mode__in": RECURRING_MODES}
-    if user_id:
-        filters["assign_to_id"] = user_id
+    anchor_10am = _anchor_10am_ist(today_ist)
 
-    seeds = (
-        active_occurrences(Checklist.objects.filter(**filters))
-        .values("assign_to_id", "task_name", "mode", "frequency", "group_name")
-        .distinct()
+    qs = ChecklistRecurringSeries.objects.filter(
+        is_active=True,
+        is_deleted=False,
     )
 
-    for s in seeds:
-        uid = int(s["assign_to_id"])
-        mode_raw = s["mode"]
-        mode = normalize_mode(mode_raw)
-        if mode not in RECURRING_MODES:
+    if user_id:
+        qs = qs.filter(assign_to_id=user_id)
+
+    series_ids = list(
+        qs.order_by("next_run_at", "id")
+        .values_list("id", flat=True)[:limit]
+    )
+
+    for series_id in series_ids:
+        try:
+            series = ChecklistRecurringSeries.objects.get(pk=series_id)
+        except ChecklistRecurringSeries.DoesNotExist:
             continue
 
-        freq_norm = max(int(s.get("frequency") or 1), 1)
-        task_name = s["task_name"]
-        group_name = s.get("group_name")
+        marker = None
 
-        series_hash = _series_identity_hash(
-            uid=uid,
-            task_name=str(task_name or ""),
-            mode=str(mode or ""),
-            freq_norm=freq_norm,
-            group_name=str(group_name) if group_name else None,
-        )
-
-        q_series = _series_q_tolerant(
-            assign_to_id=uid,
-            task_name=task_name,
-            mode=mode,
-            freq_norm=freq_norm,
-            group_name=group_name,
-        )
-
-        # Permanent series tombstone always wins over cache/date logic.
-        if series_is_permanently_deleted(q_series):
-            res.skipped_exists += 1
-            res.add(uid, None, f"permanently_deleted:{task_name}")
-            continue
-
-        # Strong safety: if we already materialized this series today, do nothing.
-        marker_lock = None
         if not dry_run:
-            marker_lock = _acquire_day_series_marker(day_iso, series_hash, now_ist=now_ist)
-            if marker_lock is None:
-                res.skipped_marker_exists += 1
-                res.add(uid, None, f"marker_exists:{task_name}")
+            marker = _acquire_marker(
+                day_iso,
+                series_id,
+                now_ist=now_ist,
+            )
+            if marker is None:
+                result.skipped_marker_exists += 1
+                result.add(series=series, note="marker_exists")
                 continue
 
         try:
-            # DB idempotency: already have a "today" row in this tolerant series?
-            if _today_row_exists(q_series):
-                res.skipped_exists += 1
-                res.add(uid, None, f"exists:{task_name}")
-                continue
-
-            # Defensive: if a future pending exists already, do not create another
-            if _future_pending_exists(q_series):
-                res.skipped_future_pending += 1
-                res.add(uid, None, f"future_pending:{task_name}")
-                continue
-
-            # Need a completed occurrence to step from
-            completed_qs = active_occurrences(
-                Checklist.objects.filter(status="Completed").filter(q_series)
+            reason, occurrence_id = _materialize_one(
+                series_id=series_id,
+                today_ist=today_ist,
+                anchor_10am=anchor_10am,
+                dry_run=dry_run,
             )
 
-            completed = completed_qs.order_by("-planned_date", "-id").first()
-            if not completed:
-                res.skipped_no_completed += 1
-                res.add(uid, None, f"no_completed:{task_name}")
-                if marker_lock:
-                    _release_marker(marker_lock)
-                continue
-
-            next_dt = _resolve_next_after_completed(getattr(completed, "planned_date", None), mode, freq_norm)
-            if not next_dt or next_dt.astimezone(IST).date() != today_ist:
-                res.skipped_not_today += 1
-                res.add(uid, None, f"not_today:{task_name}")
-                if marker_lock:
-                    _release_marker(marker_lock)
-                continue
-
-            # Leave-aware: if blocked at 10:00 IST, skip creating today's row
-            try:
-                user_obj = completed.assign_to
-            except Exception:
-                user_obj = None
-
-            try:
-                if user_obj and not guard_assign(user_obj, anchor10):
-                    res.skipped_leave += 1
-                    res.add(uid, None, f"leave_blocked:{task_name}")
-                    if marker_lock:
-                        _release_marker(marker_lock)
-                    continue
-            except Exception:
-                res.skipped_leave += 1
-                res.add(uid, None, f"leave_guard_error:{task_name}")
-                if marker_lock:
-                    _release_marker(marker_lock)
-                continue
-
-            # Dry run: report only; do not mutate or keep marker
-            if dry_run:
-                res.created += 1
-                res.add(uid, 0, f"DRY:created:{task_name}")
-                continue
-
-            # One last dupe guard inside ±1 minute around the pinned 19:00
-            try:
-                pinned_19 = IST.localize(datetime.combine(today_ist, dt_time(19, 0)))
-                dupe = (
-                    Checklist.objects.filter(status="Pending")
-                    .filter(q_series)
-                    .filter(
-                        planned_date__gte=pinned_19 - timedelta(minutes=1),
-                        planned_date__lt=pinned_19 + timedelta(minutes=1),
-                    )
-                    .exists()
+            if reason == "created":
+                result.created += 1
+                result.add(
+                    series=series,
+                    note=reason,
+                    occurrence_id=occurrence_id,
                 )
-                if dupe:
-                    res.skipped_exists += 1
-                    res.add(uid, None, f"dupe_guard:{task_name}")
-                    continue
-            except Exception:
-                res.skipped_exists += 1
-                res.add(uid, None, f"dupe_check_failed:{task_name}")
-                if marker_lock:
-                    _release_marker(marker_lock)
+                # Keep marker after successful creation.
                 continue
 
-            obj = _create_today_from_completed(completed, next_dt, freq_norm)
-            res.created += 1
-            res.add(uid, obj.id, f"created:{task_name}")
+            if reason == "dry_run_would_create":
+                result.created += 1
+                result.add(series=series, note=reason)
+                continue
 
-            # IMPORTANT: keep marker (do NOT release) to prevent resurrection later today
+            if reason == "inactive_or_deleted":
+                result.skipped_inactive += 1
+            elif reason == "pending_exists":
+                result.skipped_pending_exists += 1
+            elif reason == "no_completed_source":
+                result.skipped_no_completed += 1
+            elif reason in {"not_today", "recurrence_finished"}:
+                result.skipped_not_today += 1
+            elif reason == "leave_blocked":
+                result.skipped_leave += 1
+            elif reason == "duplicate":
+                result.skipped_duplicate += 1
+            else:
+                result.failed += 1
 
-        except Exception as e:
-            from logging import getLogger
-            getLogger(__name__).error(_safe_console_text(f"[TODAY MAT] failure for user_id={uid}: {e}"))
-            if marker_lock:
-                _release_marker(marker_lock)
-            res.skipped_not_today += 1
-            res.add(uid, None, f"failed:{task_name}")
+            result.add(series=series, note=reason)
 
-    return res
+            # Release marker for non-created states so a later legitimate retry
+            # remains possible. Deleted masters are still protected by DB state.
+            if marker:
+                _release_marker(marker)
+
+        except Exception as exc:
+            logger.exception(
+                "Today materializer failed for series_id=%s: %s",
+                series_id,
+                exc,
+            )
+            result.failed += 1
+            result.add(series=series, note=f"failed:{type(exc).__name__}")
+            if marker:
+                _release_marker(marker)
+
+    return result

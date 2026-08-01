@@ -44,7 +44,7 @@ from .forms import (
     DelegationForm, CompleteDelegationForm,
     HelpTicketForm,
 )
-from .models import Checklist, Delegation, FMS, HelpTicket
+from .models import Checklist, ChecklistRecurringSeries, Delegation, FMS, HelpTicket
 from .utils import (
     send_checklist_assignment_to_user,
     send_checklist_admin_confirmation,
@@ -56,7 +56,7 @@ from .utils import (
     send_admin_bulk_summary,
 )
 from .recurrence_utils import preserve_first_occurrence_time, normalize_mode
-from .services.checklist_lifecycle import recurring_series_q
+from .services.checklist_series_creation import create_recurring_checklist
 
 # ✅ Single source of truth: leave blocking
 from apps.tasks.utils.blocking import (
@@ -296,187 +296,143 @@ def _is_recurring_checklist_obj(obj) -> bool:
 
 
 def _checklist_series_filter_kwargs(obj) -> dict:
+    """Compatibility helper for unlinked legacy Checklist rows only."""
     mode = _normalized_checklist_mode(getattr(obj, "mode", None))
-    freq = getattr(obj, "frequency", None)
+    frequency = getattr(obj, "frequency", None)
     try:
-        freq = max(int(freq or 1), 1) if mode in RECURRING_MODES else freq
+        frequency = max(int(frequency or 1), 1) if mode in RECURRING_MODES else frequency
     except Exception:
-        freq = 1 if mode in RECURRING_MODES else freq
+        frequency = 1 if mode in RECURRING_MODES else frequency
 
     return {
         "assign_to_id": getattr(obj, "assign_to_id", None),
         "task_name": getattr(obj, "task_name", None),
         "mode": mode,
-        "frequency": freq,
-        "group_name": getattr(obj, "group_name", None),
+        "frequency": frequency,
+        "group_name": getattr(obj, "group_name", None) or "",
     }
 
 
 def _checklist_series_queryset(obj, *, include_skipped: bool = True):
-    """Return all rows belonging to the same recurring series.
+    """
+    Return occurrences for the durable recurring-series master.
 
-    Uses legacy-tolerant matching so NULL frequency is treated as 1 and
-    NULL/blank group names are treated as the same value. This prevents an old
-    completed row from escaping permanent deletion and later restarting the
-    recurrence.
+    Legacy composite matching is intentionally not used. An unlinked legacy
+    occurrence is treated as a single row until the backfill command links it.
     """
     qs = Checklist.objects.all()
+
+    recurring_series_id = getattr(obj, "recurring_series_id", None)
+    if recurring_series_id:
+        qs = qs.filter(recurring_series_id=recurring_series_id)
+    else:
+        qs = qs.filter(pk=getattr(obj, "pk", None))
+
     if not include_skipped and checklist_has_field("is_skipped_due_to_leave"):
         qs = qs.filter(is_skipped_due_to_leave=False)
 
-    mode = _normalized_checklist_mode(getattr(obj, "mode", None))
-    return qs.filter(
-        recurring_series_q(
-            assign_to_id=getattr(obj, "assign_to_id", None),
-            task_name=getattr(obj, "task_name", None),
-            mode=mode,
-            frequency=getattr(obj, "frequency", None),
-            group_name=getattr(obj, "group_name", None),
-        )
-    )
+    return qs
+
+
+def _soft_delete_occurrence_queryset(qs, *, deleted_by=None, reason: str = "") -> int:
+    now = timezone.now()
+    update_data = {}
+
+    if checklist_has_field("is_deleted"):
+        update_data["is_deleted"] = True
+    if checklist_has_field("is_active"):
+        update_data["is_active"] = False
+    if checklist_has_field("deleted_at"):
+        update_data["deleted_at"] = now
+    if checklist_has_field("deleted_by") and deleted_by is not None:
+        update_data["deleted_by"] = deleted_by
+    if checklist_has_field("delete_reason"):
+        update_data["delete_reason"] = (reason or "Deleted from checklist")[:255]
+    if checklist_has_field("is_skipped_due_to_leave"):
+        update_data["is_skipped_due_to_leave"] = True
+
+    if update_data:
+        return qs.update(**update_data)
+
+    deleted, _ = qs.delete()
+    return int(deleted or 0)
 
 
 def _void_checklist_entry(obj, *, deleted_by=None) -> int:
     """
-    Production-safe checklist delete/archive behavior.
+    Permanently stop a recurring series while preserving completed history.
 
-    Final business meaning:
+    Recurring Checklist:
+      - mark ChecklistRecurringSeries inactive/deleted;
+      - clear next_run_at;
+      - soft-delete only active Pending occurrences;
+      - preserve Completed occurrences unchanged.
 
-    1. Admin/user deletes recurring task:
-       - Keep old rows in database.
-       - Hide from main checklist.
-       - Stop recurring regeneration for that series.
-
-    2. Leave/holiday skip:
-       - Should NOT mean deleted.
-       - It should only skip that occurrence.
-       - Recurring engine should continue on next working day.
-
-    Backward compatibility:
-    Current DB still uses is_skipped_due_to_leave for hiding rows.
-    So this function sets is_skipped_due_to_leave=True also, until proper
-    is_deleted/is_active fields are fully available everywhere.
+    One-time Checklist:
+      - soft-delete only the selected row.
     """
     if not obj:
         return 0
 
-    now = timezone.now()
+    series = getattr(obj, "recurring_series", None)
 
-    update_data = {}
+    if series is not None:
+        with transaction.atomic():
+            locked = ChecklistRecurringSeries.objects.select_for_update().get(pk=series.pk)
 
-    # Future clean lifecycle fields.
-    if checklist_has_field("is_deleted"):
-        update_data["is_deleted"] = True
+            if not locked.is_deleted or locked.is_active or locked.next_run_at is not None:
+                locked.soft_delete(
+                    user=deleted_by,
+                    reason="Deleted from checklist",
+                )
 
-    if checklist_has_field("is_active"):
-        update_data["is_active"] = False
+            pending_qs = Checklist.objects.filter(
+                recurring_series_id=locked.pk,
+                status="Pending",
+            )
+            return _soft_delete_occurrence_queryset(
+                pending_qs,
+                deleted_by=deleted_by,
+                reason="Recurring series permanently stopped",
+            )
 
-    if checklist_has_field("deleted_at"):
-        update_data["deleted_at"] = now
-
-    if checklist_has_field("deleted_by") and deleted_by is not None:
-        update_data["deleted_by"] = deleted_by
-
-    if checklist_has_field("delete_reason"):
-        update_data["delete_reason"] = "Deleted from checklist"
-
-    # Backward compatibility with current UI/query behavior.
-    if checklist_has_field("is_skipped_due_to_leave"):
-        update_data["is_skipped_due_to_leave"] = True
-
-    if _is_recurring_checklist_obj(obj):
-        # Include skipped rows also so the whole recurring series is stopped.
-        qs = _checklist_series_queryset(obj, include_skipped=True)
-
-        if update_data:
-            return qs.update(**update_data)
-
-        deleted, _ = qs.delete()
-        return int(deleted or 0)
-
-    if update_data:
-        return Checklist.objects.filter(pk=obj.pk).update(**update_data)
-
-    obj.delete()
-    return 1
-
+    return _soft_delete_occurrence_queryset(
+        Checklist.objects.filter(pk=obj.pk),
+        deleted_by=deleted_by,
+        reason="Deleted from checklist",
+    )
 
 def _build_checklist_base_queryset(base_qs):
     """
-    Admin List Checklist helper.
+    Return one representative Checklist row per durable recurring series,
+    plus every one-time Checklist row.
 
-    Purpose:
-    Show one row per unique checklist task series.
-
-    This is for ADMIN checklist/master view.
-
-    One recurring series is identified by:
-      assign_to + task_name + mode + frequency + group_name
-
-    For recurring tasks:
-      show the latest non-deleted row from that series.
-
-    For one-time tasks:
-      show each one-time row separately.
-
-    Do NOT use this for employee active checklist.
-    Employees should see only actionable current tasks.
+    Linked recurring occurrences are grouped by recurring_series_id. Legacy
+    unlinked recurring rows remain separate until backfill is completed.
     """
-    recurring_qs = base_qs.filter(mode__in=RECURRING_MODES)
-    one_time_qs = base_qs.exclude(mode__in=RECURRING_MODES)
+    one_time_ids = list(
+        base_qs.filter(recurring_series__isnull=True).values_list("pk", flat=True)
+    )
+
+    recurring_ids = []
+    linked = base_qs.filter(recurring_series__isnull=False)
 
     if connection.vendor == "postgresql":
-        recurring_ids = (
-            recurring_qs
-            .order_by(
-                "assign_to_id",
-                "task_name",
-                "mode",
-                "frequency",
-                "group_name",
-                "-planned_date",
-                "-id",
-            )
-            .distinct(
-                "assign_to_id",
-                "task_name",
-                "mode",
-                "frequency",
-                "group_name",
-            )
-            .values("pk")
+        recurring_ids = list(
+            linked.order_by("recurring_series_id", "-planned_date", "-id")
+            .distinct("recurring_series_id")
+            .values_list("pk", flat=True)
         )
+    else:
+        seen = set()
+        for obj in linked.order_by("-planned_date", "-id").iterator(chunk_size=1000):
+            sid = obj.recurring_series_id
+            if sid in seen:
+                continue
+            seen.add(sid)
+            recurring_ids.append(obj.pk)
 
-        one_time_ids = one_time_qs.values("pk")
-
-        return base_qs.filter(
-            Q(pk__in=one_time_ids) |
-            Q(pk__in=recurring_ids)
-        )
-
-    # SQLite/local fallback.
-    seen = set()
-    keep_ids = []
-
-    for obj in base_qs.order_by("-planned_date", "-id").iterator(chunk_size=1000):
-        if _is_recurring_checklist_obj(obj):
-            key = (
-                getattr(obj, "assign_to_id", None),
-                getattr(obj, "task_name", None),
-                _normalized_checklist_mode(getattr(obj, "mode", None)),
-                int(getattr(obj, "frequency", None) or 1),
-                getattr(obj, "group_name", None) or "",
-            )
-        else:
-            key = ("single", getattr(obj, "pk", None))
-
-        if key in seen:
-            continue
-
-        seen.add(key)
-        keep_ids.append(obj.pk)
-
-    return base_qs.filter(pk__in=keep_ids)
+    return base_qs.filter(pk__in=[*one_time_ids, *recurring_ids])
 
 
 # -----------------------------------------------------------------------------
@@ -925,7 +881,13 @@ def _void_task_row(obj) -> None:
 # -----------------------------------------------------------------------------
 @robust_db_operation()
 def process_checklist_batch_excel_ultra_optimized(batch_df, assign_by_user, start_idx):
-    task_objects, errors = [], []
+    """
+    Create one-time Checklist rows directly and recurring Checklist rows only
+    through create_recurring_checklist().
+    """
+    one_time_objects = []
+    created = []
+    errors = []
 
     for idx, row in batch_df.iterrows():
         row_no = start_idx + idx + 1
@@ -943,7 +905,9 @@ def process_checklist_batch_excel_ultra_optimized(batch_df, assign_by_user, star
 
             assign_to = user_cache.get_user(assign_to_username)
             if not assign_to:
-                errors.append(f"Row {row_no}: User '{assign_to_username}' not found or inactive")
+                errors.append(
+                    f"Row {row_no}: User '{assign_to_username}' not found or inactive"
+                )
                 continue
 
             planned_dt = parse_datetime_flexible(row.get("Planned Date"))
@@ -951,49 +915,40 @@ def process_checklist_batch_excel_ultra_optimized(batch_df, assign_by_user, star
                 errors.append(f"Row {row_no}: Invalid or missing planned date")
                 continue
 
-            planned_dt = preserve_first_occurrence_time(planned_dt)
-            planned_dt = ensure_aware(planned_dt)
+            planned_dt = ensure_aware(preserve_first_occurrence_time(planned_dt))
+            planned_ist_date = _as_ist_aware(planned_dt).date()
 
-            planned_ist = _as_ist_aware(planned_dt)
-            planned_ist_date = planned_ist.date()
-
-            # Production rule:
-            # Do NOT shift Sunday/holiday tasks to another date.
-            # Block creation.
             if not is_working_day(planned_ist_date):
                 errors.append(
-                    f"Row {row_no}: Planned date {planned_ist_date} is Sunday/holiday. Task not created."
+                    f"Row {row_no}: Planned date {planned_ist_date} is Sunday/holiday. "
+                    "Task not created."
                 )
                 continue
 
-            # Production rule:
-            # PENDING + APPROVED leave blocks immediately.
-            # Half-day leave blocks only exact planned time.
             if _assignee_blocked_for_planned_time(assign_to, planned_dt):
                 errors.append(
-                    f"Row {row_no}: Assigned person '{assign_to_username}' is on leave during planned time. Task not created."
+                    f"Row {row_no}: Assigned person '{assign_to_username}' is on leave "
+                    "during planned time. Task not created."
                 )
                 continue
 
             message = _clean_str(row.get("Message"))
-
             priority = (_clean_str(row.get("Priority")) or "Low").title()
             if priority not in ["Low", "Medium", "High"]:
                 priority = "Low"
 
             mode, frequency = parse_mode_frequency_from_row(row)
-
             time_per_task = parse_int(row.get("Time per Task (minutes)"), default=0)
-
-            remind_before_days = parse_int(
-                row.get("Remind Before Days")
-                or row.get("Reminder Before Days")
-                or row.get("Remind days")
-                or row.get("Remind Before"),
-                default=0,
+            remind_before_days = max(
+                parse_int(
+                    row.get("Remind Before Days")
+                    or row.get("Reminder Before Days")
+                    or row.get("Remind days")
+                    or row.get("Remind Before"),
+                    default=0,
+                ),
+                0,
             )
-            if remind_before_days < 0:
-                remind_before_days = 0
 
             assign_pc = user_cache.get_user(_clean_str(row.get("Assign PC")))
             notify_to = user_cache.get_user(_clean_str(row.get("Notify To")))
@@ -1006,86 +961,122 @@ def process_checklist_batch_excel_ultra_optimized(batch_df, assign_by_user, star
             reminder_starting_time = None
 
             if set_reminder:
-                rmode = _clean_str(row.get("Reminder Mode"))
-                rmode = _SYN_MODE.get(rmode.lower(), rmode.title()) if rmode else "Daily"
-                reminder_mode = rmode if rmode in RECURRING_MODES else "Daily"
-                reminder_frequency = parse_int(row.get("Reminder Frequency"), default=1)
+                raw_reminder_mode = _clean_str(row.get("Reminder Mode"))
+                raw_reminder_mode = (
+                    _SYN_MODE.get(raw_reminder_mode.lower(), raw_reminder_mode.title())
+                    if raw_reminder_mode
+                    else "Daily"
+                )
+                reminder_mode = (
+                    raw_reminder_mode if raw_reminder_mode in RECURRING_MODES else "Daily"
+                )
+                reminder_frequency = max(
+                    parse_int(row.get("Reminder Frequency"), default=1),
+                    1,
+                )
 
-                tval = row.get("Reminder Starting Time")
-                if tval:
-                    ts = _clean_str(tval)
+                raw_time = row.get("Reminder Starting Time")
+                if raw_time:
+                    text_time = _clean_str(raw_time)
                     try:
-                        if ":" in ts:
-                            reminder_starting_time = datetime.strptime(ts, "%H:%M").time()
+                        if ":" in text_time:
+                            reminder_starting_time = datetime.strptime(text_time, "%H:%M").time()
                         else:
-                            f = float(ts)
-                            h = int(f * 24) % 24
-                            m = int(round(f * 24 * 60)) % 60
-                            reminder_starting_time = dt_time(h, m)
+                            fraction = float(text_time)
+                            hour = int(fraction * 24) % 24
+                            minute = int(round(fraction * 24 * 60)) % 60
+                            reminder_starting_time = dt_time(hour, minute)
                     except Exception:
                         reminder_starting_time = None
 
-            checklist = Checklist(
-                assign_by=assign_by_user,
-                task_name=task_name,
-                message=message,
-                assign_to=assign_to,
-                planned_date=planned_dt,
-                priority=priority,
-                attachment_mandatory=False,
-                mode=mode,
-                frequency=frequency if mode else None,
-                time_per_task_minutes=time_per_task,
-                remind_before_days=remind_before_days,
-                assign_pc=assign_pc,
-                group_name=group_name,
-                notify_to=notify_to,
-                auditor=auditor,
-                set_reminder=set_reminder,
-                reminder_mode=reminder_mode,
-                reminder_frequency=reminder_frequency,
-                reminder_starting_time=reminder_starting_time,
-                checklist_auto_close=parse_bool(row.get("Checklist Auto Close")),
-                checklist_auto_close_days=parse_int(row.get("Checklist Auto Close Days"), default=0),
-                actual_duration_minutes=0,
-                status="Pending",
-            )
+            common = {
+                "assign_by": assign_by_user,
+                "task_name": task_name,
+                "message": message,
+                "assign_to": assign_to,
+                "planned_date": planned_dt,
+                "priority": priority,
+                "attachment_mandatory": False,
+                "time_per_task_minutes": time_per_task,
+                "remind_before_days": remind_before_days,
+                "assign_pc": assign_pc,
+                "group_name": group_name,
+                "notify_to": notify_to,
+                "auditor": auditor,
+                "set_reminder": set_reminder,
+                "reminder_mode": reminder_mode,
+                "reminder_frequency": reminder_frequency,
+                "reminder_starting_time": reminder_starting_time,
+                "checklist_auto_close": parse_bool(row.get("Checklist Auto Close")),
+                "checklist_auto_close_days": max(
+                    parse_int(row.get("Checklist Auto Close Days"), default=0),
+                    0,
+                ),
+            }
 
-            task_objects.append(checklist)
-
-        except Exception as e:
-            errors.append(f"Row {row_no}: {str(e)}")
-
-    created = []
-
-    if task_objects:
-        try:
-            with transaction.atomic():
-                bs = min(len(task_objects), optimal_batch_size())
-                created = Checklist.objects.bulk_create(
-                    task_objects,
-                    batch_size=bs,
-                    ignore_conflicts=False,
+            if mode in RECURRING_MODES:
+                try:
+                    _, first_occurrence = create_recurring_checklist(
+                        assign_by=common["assign_by"],
+                        assign_to=common["assign_to"],
+                        task_name=common["task_name"],
+                        planned_date=common["planned_date"],
+                        mode=mode,
+                        frequency=max(int(frequency or 1), 1),
+                        group_name=common["group_name"],
+                        message=common["message"],
+                        priority=common["priority"],
+                        attachment_mandatory=common["attachment_mandatory"],
+                        time_per_task_minutes=common["time_per_task_minutes"],
+                        remind_before_days=common["remind_before_days"],
+                        assign_pc=common["assign_pc"],
+                        notify_to=common["notify_to"],
+                        auditor=common["auditor"],
+                        set_reminder=common["set_reminder"],
+                        reminder_mode=common["reminder_mode"],
+                        reminder_frequency=common["reminder_frequency"],
+                        reminder_starting_time=common["reminder_starting_time"],
+                        checklist_auto_close=common["checklist_auto_close"],
+                        checklist_auto_close_days=common["checklist_auto_close_days"],
+                    )
+                    created.append(first_occurrence)
+                except Exception as exc:
+                    errors.append(f"Row {row_no}: Could not create recurring checklist: {exc}")
+            else:
+                one_time_objects.append(
+                    Checklist(
+                        **common,
+                        mode=None,
+                        frequency=None,
+                        actual_duration_minutes=0,
+                        status="Pending",
+                    )
                 )
 
-        except Exception as e:
-            logger.error("bulk_create failed; falling back: %s", e)
+        except Exception as exc:
+            errors.append(f"Row {row_no}: {exc}")
 
-            for i in range(0, len(task_objects), 50):
-                batch = task_objects[i:i + 50]
-
+    if one_time_objects:
+        try:
+            with transaction.atomic():
+                batch_size = min(len(one_time_objects), optimal_batch_size())
+                created.extend(
+                    Checklist.objects.bulk_create(
+                        one_time_objects,
+                        batch_size=batch_size,
+                        ignore_conflicts=False,
+                    )
+                )
+        except Exception as exc:
+            logger.error("One-time Checklist bulk_create failed; falling back: %s", exc)
+            for obj in one_time_objects:
                 try:
-                    created.extend(Checklist.objects.bulk_create(batch, batch_size=50))
-
-                except Exception:
-                    for obj in batch:
-                        try:
-                            obj.save()
-                            created.append(obj)
-                        except Exception as save_err:
-                            errors.append(
-                                f"Failed to save '{clean_unicode_string(obj.task_name)}': {save_err}"
-                            )
+                    obj.save()
+                    created.append(obj)
+                except Exception as save_exc:
+                    errors.append(
+                        f"Failed to save '{clean_unicode_string(obj.task_name)}': {save_exc}"
+                    )
 
     return created, errors
 
@@ -1758,42 +1749,80 @@ def add_checklist(request):
         form = ChecklistForm(request.POST, request.FILES)
 
         if form.is_valid():
-            planned_date = preserve_first_occurrence_time(form.cleaned_data.get("planned_date"))
-            planned_date = ensure_aware(planned_date)
+            planned_date = ensure_aware(
+                preserve_first_occurrence_time(form.cleaned_data.get("planned_date"))
+            )
             assignee = form.cleaned_data.get("assign_to")
-
             ist_day = _as_ist_aware(planned_date).date() if planned_date else None
 
-            # Production rule:
-            # Do NOT allow task creation on Sunday/holiday.
-            # Do NOT shift to next working day.
             if ist_day and not is_working_day(ist_day):
                 messages.error(request, "This day is Sunday/holiday. Task cannot be created.")
                 return render(request, "tasks/add_checklist.html", {"form": form})
 
-            # Production rule:
-            # PENDING + APPROVED leave blocks immediately.
-            # Half-day leave blocks only exact planned time.
             if assignee and _assignee_blocked_for_planned_time(assignee, planned_date):
                 messages.error(request, _leave_block_message())
                 return render(request, "tasks/add_checklist.html", {"form": form})
 
-            obj = form.save(commit=False)
-            obj.planned_date = planned_date
-            obj.save()
-            form.save_m2m()
+            mode = _normalized_checklist_mode(form.cleaned_data.get("mode"))
+
+            try:
+                if mode in RECURRING_MODES:
+                    frequency = max(int(form.cleaned_data.get("frequency") or 1), 1)
+                    _, obj = create_recurring_checklist(
+                        assign_by=form.cleaned_data.get("assign_by") or request.user,
+                        assign_to=assignee,
+                        task_name=form.cleaned_data.get("task_name"),
+                        planned_date=planned_date,
+                        mode=mode,
+                        frequency=frequency,
+                        group_name=form.cleaned_data.get("group_name") or "",
+                        message=form.cleaned_data.get("message") or "",
+                        priority=form.cleaned_data.get("priority") or "Low",
+                        attachment_mandatory=bool(
+                            form.cleaned_data.get("attachment_mandatory")
+                        ),
+                        recurrence_end_date=form.cleaned_data.get("recurrence_end_date"),
+                        time_per_task_minutes=form.cleaned_data.get("time_per_task_minutes") or 0,
+                        remind_before_days=form.cleaned_data.get("remind_before_days") or 0,
+                        assign_pc=form.cleaned_data.get("assign_pc"),
+                        notify_to=form.cleaned_data.get("notify_to"),
+                        auditor=form.cleaned_data.get("auditor"),
+                        set_reminder=bool(form.cleaned_data.get("set_reminder")),
+                        reminder_mode=form.cleaned_data.get("reminder_mode"),
+                        reminder_frequency=form.cleaned_data.get("reminder_frequency"),
+                        reminder_starting_time=form.cleaned_data.get("reminder_starting_time"),
+                        checklist_auto_close=bool(
+                            form.cleaned_data.get("checklist_auto_close")
+                        ),
+                        checklist_auto_close_days=(
+                            form.cleaned_data.get("checklist_auto_close_days") or 0
+                        ),
+                    )
+                else:
+                    obj = form.save(commit=False)
+                    obj.planned_date = planned_date
+                    obj.mode = None
+                    obj.frequency = None
+                    obj.recurring_series = None
+                    obj.save()
+                    form.save_m2m()
+            except Exception as exc:
+                logger.exception("Checklist creation failed: %s", exc)
+                messages.error(request, f"Checklist could not be created: {exc}")
+                return render(request, "tasks/add_checklist.html", {"form": form})
 
             try:
                 send_checklist_admin_confirmation(
                     task=obj,
                     subject_prefix="Checklist Task Assignment",
                 )
-            except Exception as e:
-                logger.error("Admin confirmation email failed: %s", e)
+            except Exception as exc:
+                logger.error("Admin confirmation email failed: %s", exc)
 
             messages.success(
                 request,
-                f"Checklist task '{obj.task_name}' created and will notify the assignee at 10:00 AM on the due day.",
+                f"Checklist task '{obj.task_name}' created and will notify the assignee "
+                "at 10:00 AM on the due day.",
             )
             return redirect(request.GET.get("next") or reverse("tasks:list_checklist"))
 
@@ -1805,97 +1834,143 @@ def add_checklist(request):
 
 @has_permission("add_checklist")
 def edit_checklist(request, pk):
-    obj = get_object_or_404(Checklist, pk=pk)
+    obj = get_object_or_404(
+        Checklist.objects.select_related("recurring_series", "assign_to"),
+        pk=pk,
+    )
 
-    # Non-admins can only edit tasks assigned to themselves.
     if not is_admin_user(request.user) and obj.assign_to_id != request.user.id:
         messages.error(request, "You can only edit tasks assigned to you.")
         return redirect(reverse("tasks:list_checklist"))
 
     old_assignee = obj.assign_to
 
-    # Capture the ORIGINAL recurring-series identity BEFORE form save.
-    # This is critical because task_name / assign_to / mode / frequency / group_name
-    # are mutable but are currently used as the recurring-series key.
-    old_is_recurring = _is_recurring_checklist_obj(obj)
-    old_series_filter = _checklist_series_filter_kwargs(obj) if old_is_recurring else None
-
     if request.method == "POST":
         form = ChecklistForm(request.POST, request.FILES, instance=obj)
 
         if form.is_valid():
-            planned_date = preserve_first_occurrence_time(form.cleaned_data.get("planned_date"))
-            planned_date = ensure_aware(planned_date)
+            planned_date = ensure_aware(
+                preserve_first_occurrence_time(form.cleaned_data.get("planned_date"))
+            )
             assignee = form.cleaned_data.get("assign_to")
-
             ist_day = _as_ist_aware(planned_date).date() if planned_date else None
 
-            # Production rule:
-            # Do NOT allow task update to Sunday/holiday.
             if ist_day and not is_working_day(ist_day):
                 messages.error(request, "This day is Sunday/holiday. Task cannot be updated.")
                 return render(request, "tasks/add_checklist.html", {"form": form})
 
-            # Production rule:
-            # PENDING + APPROVED leave blocks immediately.
-            # Half-day leave blocks only exact planned time.
             if assignee and _assignee_blocked_for_planned_time(assignee, planned_date):
                 messages.error(request, _leave_block_message())
                 return render(request, "tasks/add_checklist.html", {"form": form})
 
-            with transaction.atomic():
-                obj2 = form.save(commit=False)
-                obj2.planned_date = planned_date
-                obj2.save()
-                form.save_m2m()
+            new_mode = _normalized_checklist_mode(form.cleaned_data.get("mode"))
+            series = obj.recurring_series
 
-                # Recurring checklist fix:
-                #
-                # Current master-list grouping treats one recurring series as:
-                # assign_to + task_name + mode + frequency + group_name
-                #
-                # If only the selected/latest row is edited, changing task_name
-                # splits one recurring series into two visible rows:
-                #
-                # Old rows: Handle BG
-                # Edited row: Handle BG Customer
-                #
-                # So for recurring tasks, update all rows from the ORIGINAL
-                # series identity with the new master/config values.
-                #
-                # IMPORTANT:
-                # Do NOT update planned_date for sibling rows here.
-                # Each recurring occurrence has its own planned_date.
-                if old_is_recurring and old_series_filter:
-                    sibling_qs = Checklist.objects.filter(**old_series_filter).exclude(pk=obj2.pk)
+            try:
+                with transaction.atomic():
+                    if series is not None:
+                        if new_mode not in RECURRING_MODES:
+                            raise ValueError(
+                                "A recurring series cannot be converted to one-time from this edit screen. "
+                                "Delete the series and create a one-time task instead."
+                            )
 
-                    if checklist_has_field("is_deleted"):
-                        sibling_qs = sibling_qs.filter(is_deleted=False)
+                        locked = ChecklistRecurringSeries.objects.select_for_update().get(
+                            pk=series.pk
+                        )
+                        locked.assign_by = form.cleaned_data.get("assign_by") or obj.assign_by
+                        locked.assign_to = assignee
+                        locked.task_name = form.cleaned_data.get("task_name")
+                        locked.message = form.cleaned_data.get("message") or ""
+                        locked.mode = new_mode
+                        locked.frequency = max(
+                            int(form.cleaned_data.get("frequency") or 1),
+                            1,
+                        )
+                        locked.group_name = form.cleaned_data.get("group_name") or ""
+                        locked.first_planned_date = planned_date
+                        locked.recurrence_end_date = form.cleaned_data.get("recurrence_end_date")
+                        locked.priority = form.cleaned_data.get("priority") or "Low"
+                        locked.attachment_mandatory = bool(
+                            form.cleaned_data.get("attachment_mandatory")
+                        )
+                        locked.time_per_task_minutes = (
+                            form.cleaned_data.get("time_per_task_minutes") or 0
+                        )
+                        locked.remind_before_days = (
+                            form.cleaned_data.get("remind_before_days") or 0
+                        )
+                        locked.assign_pc = form.cleaned_data.get("assign_pc")
+                        locked.notify_to = form.cleaned_data.get("notify_to")
+                        locked.auditor = form.cleaned_data.get("auditor")
+                        locked.set_reminder = bool(form.cleaned_data.get("set_reminder"))
+                        locked.reminder_mode = form.cleaned_data.get("reminder_mode")
+                        locked.reminder_frequency = form.cleaned_data.get("reminder_frequency")
+                        locked.reminder_starting_time = form.cleaned_data.get(
+                            "reminder_starting_time"
+                        )
+                        locked.checklist_auto_close = bool(
+                            form.cleaned_data.get("checklist_auto_close")
+                        )
+                        locked.checklist_auto_close_days = (
+                            form.cleaned_data.get("checklist_auto_close_days") or 0
+                        )
+                        locked.save()
 
-                    update_data = {
-                        "task_name": obj2.task_name,
-                        "message": obj2.message,
-                        "assign_to": obj2.assign_to,
-                        "priority": obj2.priority,
-                        "attachment_mandatory": obj2.attachment_mandatory,
-                        "mode": obj2.mode,
-                        "frequency": obj2.frequency,
-                        "recurrence_end_date": obj2.recurrence_end_date,
-                        "time_per_task_minutes": obj2.time_per_task_minutes,
-                        "remind_before_days": obj2.remind_before_days,
-                        "assign_pc": obj2.assign_pc,
-                        "group_name": obj2.group_name,
-                        "notify_to": obj2.notify_to,
-                        "auditor": obj2.auditor,
-                        "set_reminder": obj2.set_reminder,
-                        "reminder_mode": obj2.reminder_mode,
-                        "reminder_frequency": obj2.reminder_frequency,
-                        "reminder_starting_time": obj2.reminder_starting_time,
-                        "checklist_auto_close": obj2.checklist_auto_close,
-                        "checklist_auto_close_days": obj2.checklist_auto_close_days,
-                    }
+                        pending = Checklist.objects.select_for_update().filter(
+                            recurring_series=locked,
+                            status="Pending",
+                            is_deleted=False,
+                            is_active=True,
+                        )
+                        pending.update(
+                            assign_by=locked.assign_by,
+                            assign_to=locked.assign_to,
+                            task_name=locked.task_name,
+                            message=locked.message,
+                            priority=locked.priority,
+                            attachment_mandatory=locked.attachment_mandatory,
+                            mode=locked.mode,
+                            frequency=locked.frequency,
+                            recurrence_end_date=locked.recurrence_end_date,
+                            time_per_task_minutes=locked.time_per_task_minutes,
+                            remind_before_days=locked.remind_before_days,
+                            assign_pc=locked.assign_pc,
+                            notify_to=locked.notify_to,
+                            auditor=locked.auditor,
+                            set_reminder=locked.set_reminder,
+                            reminder_mode=locked.reminder_mode,
+                            reminder_frequency=locked.reminder_frequency,
+                            reminder_starting_time=locked.reminder_starting_time,
+                            checklist_auto_close=locked.checklist_auto_close,
+                            checklist_auto_close_days=locked.checklist_auto_close_days,
+                            group_name=locked.group_name,
+                        )
 
-                    sibling_qs.update(**update_data)
+                        obj.refresh_from_db()
+                        if obj.status == "Pending":
+                            obj.planned_date = planned_date
+                            obj.save(update_fields=["planned_date"])
+                        obj2 = obj
+                    else:
+                        if new_mode in RECURRING_MODES:
+                            raise ValueError(
+                                "A one-time task cannot be converted into a recurring series from this "
+                                "edit screen. Create a new recurring checklist instead."
+                            )
+
+                        obj2 = form.save(commit=False)
+                        obj2.planned_date = planned_date
+                        obj2.mode = None
+                        obj2.frequency = None
+                        obj2.recurring_series = None
+                        obj2.save()
+                        form.save_m2m()
+
+            except Exception as exc:
+                logger.exception("Checklist update failed: %s", exc)
+                messages.error(request, f"Checklist could not be updated: {exc}")
+                return render(request, "tasks/add_checklist.html", {"form": form})
 
             try:
                 if old_assignee and obj2.assign_to_id != old_assignee.id:
@@ -1909,13 +1984,12 @@ def edit_checklist(request, pk):
                         task=obj2,
                         subject_prefix="Checklist Task Updated",
                     )
-
-            except Exception as e:
-                logger.error("Update emails failed: %s", e)
+            except Exception as exc:
+                logger.error("Update emails failed: %s", exc)
 
             messages.success(
                 request,
-                f"Checklist task '{obj2.task_name}' updated successfully! Assignee will be notified at 10:00 AM on the due day.",
+                f"Checklist task '{obj2.task_name}' updated successfully!",
             )
             return redirect(request.GET.get("next") or reverse("tasks:list_checklist"))
 
@@ -1923,6 +1997,7 @@ def edit_checklist(request, pk):
         form = ChecklistForm(instance=obj)
 
     return render(request, "tasks/add_checklist.html", {"form": form})
+
 
 @has_permission("list_checklist")
 def delete_checklist(request, pk):
@@ -1975,8 +2050,23 @@ def reassign_checklist(request, pk):
             messages.error(request, _leave_block_message())
             return redirect(request.GET.get("next") or reverse("tasks:list_checklist"))
 
-        obj.assign_to = new_assignee
-        obj.save(update_fields=["assign_to"])
+        with transaction.atomic():
+            if obj.recurring_series_id:
+                series = ChecklistRecurringSeries.objects.select_for_update().get(
+                    pk=obj.recurring_series_id
+                )
+                series.assign_to = new_assignee
+                series.save(update_fields=["assign_to", "updated_at"])
+                Checklist.objects.filter(
+                    recurring_series=series,
+                    status="Pending",
+                    is_deleted=False,
+                    is_active=True,
+                ).update(assign_to=new_assignee)
+                obj.refresh_from_db()
+            else:
+                obj.assign_to = new_assignee
+                obj.save(update_fields=["assign_to"])
 
         try:
             if old_assignee and old_assignee.id != obj.assign_to_id:
@@ -2709,7 +2799,7 @@ def dashboard_home(request):
 
     try:
         pending_tasks = {
-            'checklist': Checklist.objects.filter(assign_to=request.user, status='Pending', is_skipped_due_to_leave=False).count(),
+            'checklist': Checklist.objects.filter(assign_to=request.user, status='Pending', is_skipped_due_to_leave=False, is_deleted=False, is_active=True).count(),
             'delegation': Delegation.objects.filter(assign_to=request.user, status='Pending', is_skipped_due_to_leave=False).count(),
             'help_ticket': HelpTicket.objects.filter(assign_to=request.user, is_skipped_due_to_leave=False).exclude(status='Closed').count(),
         }
@@ -2724,14 +2814,14 @@ def dashboard_home(request):
         if today_only:
             base_checklists = list(
                 Checklist.objects
-                .filter(assign_to=request.user, status='Pending', planned_date__date=today_ist, is_skipped_due_to_leave=False)
+                .filter(assign_to=request.user, status='Pending', planned_date__date=today_ist, is_skipped_due_to_leave=False, is_deleted=False, is_active=True)
                 .select_related('assign_by')
                 .order_by('planned_date')
             )
         else:
             base_checklists = list(
                 Checklist.objects
-                .filter(assign_to=request.user, status='Pending', is_skipped_due_to_leave=False)
+                .filter(assign_to=request.user, status='Pending', is_skipped_due_to_leave=False, is_deleted=False, is_active=True)
                 .select_related('assign_by')
                 .order_by('planned_date')
             )

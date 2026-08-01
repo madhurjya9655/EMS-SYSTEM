@@ -175,6 +175,20 @@ def _model_has_field(model, field_name: str) -> bool:
         return hasattr(model, field_name)
 
 
+
+def _exclude_inactive_checklists(qs):
+    """
+    Checklist occurrence visibility guard for the recurring-series architecture.
+    """
+    if _model_has_field(Checklist, "is_skipped_due_to_leave"):
+        qs = qs.filter(is_skipped_due_to_leave=False)
+    if _model_has_field(Checklist, "is_deleted"):
+        qs = qs.filter(is_deleted=False)
+    if _model_has_field(Checklist, "is_active"):
+        qs = qs.filter(is_active=True)
+    return qs
+
+
 def _normalise_row(row: Dict[str, Any]) -> Dict[str, Any]:
     """
     Keeps email templates stable by ensuring every row has all expected keys.
@@ -356,8 +370,7 @@ def _rows_for_user(user) -> List[Dict[str, Any]]:
     try:
         qs = Checklist.objects.filter(status="Pending", assign_to=user)
 
-        if _model_has_field(Checklist, "is_skipped_due_to_leave"):
-            qs = qs.filter(is_skipped_due_to_leave=False)
+        qs = _exclude_inactive_checklists(qs)
 
         qs = qs.select_related("assign_to", "assign_by").order_by(
             "planned_date",
@@ -490,8 +503,7 @@ def _rows_for_all_users() -> List[Dict[str, Any]]:
     try:
         qs = Checklist.objects.filter(status="Pending")
 
-        if _model_has_field(Checklist, "is_skipped_due_to_leave"):
-            qs = qs.filter(is_skipped_due_to_leave=False)
+        qs = _exclude_inactive_checklists(qs)
 
         qs = qs.select_related("assign_to", "assign_by").order_by(
             "planned_date",
