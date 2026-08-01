@@ -1,4 +1,4 @@
-# D:\CLIENT PROJECT\employee management system bos\employee_management_system\apps\recruitment\views.py
+# apps/recruitment/views.py
 from __future__ import annotations
 
 from datetime import date
@@ -25,6 +25,9 @@ from .forms import (
 from .models import Candidate, Employee, InterviewFeedback, InterviewSchedule
 from apps.leave.models import ApproverMapping, CCConfiguration
 from apps.users.models import Profile
+from apps.tasks.services.employee_task_cleanup import (
+    soft_delete_all_tasks_for_employee,
+)
 
 User = get_user_model()
 
@@ -511,10 +514,16 @@ def employee_create(request):
 @transaction.atomic
 def employee_delete(request, user_id: int):
     """
-    POST-only: deletes the Django auth User.
+    POST-only employee deletion endpoint.
 
-    Employee record is deleted automatically via CASCADE.
-    Cleans up mappings and CC config first.
+    Safe order:
+      1. Stop all recurring masters assigned to the employee.
+      2. Soft-delete all linked/assigned task rows.
+      3. Remove routing and CC configuration.
+      4. Delete the auth User.
+
+    The cleanup service never reassigns tasks. Deleted recurring masters remain
+    inactive/deleted with next_run_at=None, so schedulers cannot recreate them.
     """
     if request.method != "POST":
         return HttpResponseForbidden("POST required")
@@ -522,10 +531,30 @@ def employee_delete(request, user_id: int):
     next_url = request.POST.get("next") or reverse("recruitment:employee_list")
     user = get_object_or_404(User, pk=user_id)
 
+    if user.pk == request.user.pk:
+        messages.error(request, "You cannot delete your own logged-in account.")
+        return redirect(next_url)
+
+    name = (
+        getattr(user, "get_full_name", lambda: "")()
+        or user.username
+        or user.email
+    )
+
+    cleanup = soft_delete_all_tasks_for_employee(
+        user,
+        deleted_by=request.user,
+        reason="Employee permanently deleted by admin",
+    )
+
     # Clean up ApproverMapping references.
     ApproverMapping.objects.filter(employee_id=user.id).delete()
-    ApproverMapping.objects.filter(reporting_person_id=user.id).update(reporting_person=None)
-    ApproverMapping.objects.filter(cc_person_id=user.id).update(cc_person=None)
+    ApproverMapping.objects.filter(
+        reporting_person_id=user.id
+    ).update(reporting_person=None)
+    ApproverMapping.objects.filter(
+        cc_person_id=user.id
+    ).update(cc_person=None)
 
     # Clean up ManyToMany references where this user is assigned as default CC.
     for mapping in ApproverMapping.objects.filter(default_cc_users=user):
@@ -534,12 +563,20 @@ def employee_delete(request, user_id: int):
     # Clean up CC Configuration.
     CCConfiguration.objects.filter(user_id=user.id).delete()
 
-    name = getattr(user, "get_full_name", lambda: "")() or user.username or user.email
-
-    # Deleting User cascades to Employee via OneToOneField(on_delete=CASCADE).
+    # Employee is removed automatically through Employee.user CASCADE.
     user.delete()
 
-    messages.success(request, f"Deleted employee: {name}")
+    messages.success(
+        request,
+        (
+            f"Deleted employee: {name}. "
+            f"Stopped {cleanup['recurring_series_stopped']} recurring series and "
+            f"soft-deleted {cleanup['checklist_rows_deleted']} checklist, "
+            f"{cleanup['delegation_rows_deleted']} delegation, "
+            f"{cleanup['help_ticket_rows_deleted']} help-ticket and "
+            f"{cleanup['fms_rows_deleted']} FMS row(s)."
+        ),
+    )
     return redirect(next_url)
 
 
@@ -570,12 +607,93 @@ class EmployeeUpdateView(LoginRequiredMixin, UpdateView):
     template_name = "recruitment/employee_form.html"
     success_url = reverse_lazy("recruitment:employee_list")
 
+    @transaction.atomic
+    def form_valid(self, form):
+        employee = self.get_object()
+        linked_user = employee.user
+        was_active = bool(
+            linked_user.is_active
+            if linked_user is not None
+            else employee.is_active
+        )
+        will_be_active = bool(form.cleaned_data.get("is_active"))
+
+        response = super().form_valid(form)
+
+        if linked_user is not None:
+            if linked_user.is_active != will_be_active:
+                linked_user.is_active = will_be_active
+                linked_user.save(update_fields=["is_active"])
+
+            if was_active and not will_be_active:
+                cleanup = soft_delete_all_tasks_for_employee(
+                    linked_user,
+                    deleted_by=self.request.user,
+                    reason="Employee deactivated by admin",
+                )
+                messages.success(
+                    self.request,
+                    (
+                        f"Employee deactivated. Stopped "
+                        f"{cleanup['recurring_series_stopped']} recurring series "
+                        "and soft-deleted all assigned tasks."
+                    ),
+                )
+
+        return response
+
 
 class EmployeeDeleteView(LoginRequiredMixin, DeleteView):
     login_url = "login"
     model = Employee
     template_name = "recruitment/employee_confirm_delete.html"
     success_url = reverse_lazy("recruitment:employee_list")
+
+    @transaction.atomic
+    def form_valid(self, form):
+        self.object = self.get_object()
+        linked_user = self.object.user
+
+        if linked_user is not None:
+            if linked_user.pk == self.request.user.pk:
+                messages.error(
+                    self.request,
+                    "You cannot delete your own logged-in account.",
+                )
+                return redirect(self.success_url)
+
+            cleanup = soft_delete_all_tasks_for_employee(
+                linked_user,
+                deleted_by=self.request.user,
+                reason="Employee permanently deleted by admin",
+            )
+
+            name = (
+                linked_user.get_full_name()
+                or linked_user.username
+                or linked_user.email
+            )
+
+            # Deleting User also deletes Employee because Employee.user uses
+            # on_delete=models.CASCADE.
+            linked_user.delete()
+
+            messages.success(
+                self.request,
+                (
+                    f"Deleted employee: {name}. Stopped "
+                    f"{cleanup['recurring_series_stopped']} recurring series "
+                    "and soft-deleted all assigned tasks."
+                ),
+            )
+            return redirect(self.success_url)
+
+        messages.success(
+            self.request,
+            f"Deleted employee record: {self.object}",
+        )
+        self.object.delete()
+        return redirect(self.success_url)
 
 
 # ---------------------------------------------------------------------

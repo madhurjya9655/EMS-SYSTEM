@@ -1,4 +1,4 @@
-# D:\CLIENT PROJECT\employee management system bos\employee_management_system\apps\tasks\tasks.py
+# apps/tasks/tasks.py
 from __future__ import annotations
 
 import logging
@@ -409,7 +409,12 @@ def _fetch_delegations_due_today(start_dt, end_dt):
         return []
 
     try:
-        qs = Delegation.objects.filter(status="Pending", planned_date__gte=start_dt, planned_date__lte=end_dt)
+        qs = Delegation.objects.filter(
+            status="Pending",
+            planned_date__gte=start_dt,
+            planned_date__lte=end_dt,
+            assign_to__is_active=True,
+        )
 
         if hasattr(Delegation, "is_skipped_due_to_leave"):
             qs = qs.filter(is_skipped_due_to_leave=False)
@@ -431,12 +436,20 @@ def _fetch_checklists_due_today(start_dt, end_dt):
         return []
 
     try:
-        qs = Checklist.objects.filter(status="Pending", planned_date__gte=start_dt, planned_date__lte=end_dt)
-
-        qs = qs.filter(
+        qs = Checklist.objects.filter(
+            status="Pending",
+            planned_date__gte=start_dt,
+            planned_date__lte=end_dt,
+            assign_to__is_active=True,
             is_skipped_due_to_leave=False,
             is_deleted=False,
             is_active=True,
+        ).filter(
+            Q(recurring_series__isnull=True)
+            | Q(
+                recurring_series__is_active=True,
+                recurring_series__is_deleted=False,
+            )
         )
 
         return list(
@@ -751,6 +764,7 @@ def dispatch_delegation_reminders(self) -> dict:
         reminder_time__isnull=False,
         reminder_sent_at__isnull=True,
         reminder_time__lte=now,
+        assign_to__is_active=True,
     )
 
     if hasattr(Delegation, "is_skipped_due_to_leave"):
@@ -871,14 +885,21 @@ def _build_pending_rows() -> List[Dict[str, Any]]:
 
     try:
         qs = (
-            Checklist.objects.filter(status="Pending")
+            Checklist.objects.filter(
+                status="Pending",
+                assign_to__is_active=True,
+                is_skipped_due_to_leave=False,
+                is_deleted=False,
+                is_active=True,
+            )
             .filter(Q(planned_date__isnull=True) | Q(planned_date__lte=end_today))
-        )
-
-        qs = qs.filter(
-            is_skipped_due_to_leave=False,
-            is_deleted=False,
-            is_active=True,
+            .filter(
+                Q(recurring_series__isnull=True)
+                | Q(
+                    recurring_series__is_active=True,
+                    recurring_series__is_deleted=False,
+                )
+            )
         )
 
         qs = qs.select_related(
@@ -911,7 +932,7 @@ def _build_pending_rows() -> List[Dict[str, Any]]:
 
     try:
         qs = (
-            Delegation.objects.filter(status="Pending")
+            Delegation.objects.filter(status="Pending", assign_to__is_active=True)
             .filter(Q(planned_date__isnull=True) | Q(planned_date__lte=end_today))
         )
 
@@ -946,7 +967,7 @@ def _build_pending_rows() -> List[Dict[str, Any]]:
 
     try:
         qs = (
-            FMS.objects.filter(status="Pending")
+            FMS.objects.filter(status="Pending", assign_to__is_active=True)
             .filter(Q(planned_date__isnull=True) | Q(planned_date__lte=end_today))
         )
 
@@ -977,6 +998,7 @@ def _build_pending_rows() -> List[Dict[str, Any]]:
     try:
         qs = (
             HelpTicket.objects.exclude(status="Closed")
+            .filter(assign_to__is_active=True)
             .filter(Q(planned_date__isnull=True) | Q(planned_date__lte=end_today))
         )
 
@@ -1117,12 +1139,16 @@ def auto_unblock_overdue_dailies(*, user_id: int | None = None, dry_run: bool = 
         mode="Daily",
         planned_date__date__lt=today,
         status="Pending",
-    )
-
-    qs = qs.filter(
+        assign_to__is_active=True,
         is_skipped_due_to_leave=False,
         is_deleted=False,
         is_active=True,
+    ).filter(
+        Q(recurring_series__isnull=True)
+        | Q(
+            recurring_series__is_active=True,
+            recurring_series__is_deleted=False,
+        )
     )
 
     if user_id:
@@ -1243,5 +1269,3 @@ def send_weekly_mis_report(self) -> dict:
             f"attachment={result.get('excel_attachment')}"
         )
     )
-
-    return result

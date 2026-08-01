@@ -208,6 +208,21 @@ def _materialize_one(
     if series.is_deleted or not series.is_active:
         return "inactive_or_deleted", None
 
+    if not series.assign_to_id or not series.assign_to.is_active:
+        if not dry_run:
+            series.is_active = False
+            series.is_deleted = True
+            series.next_run_at = None
+            series.save(
+                update_fields=[
+                    "is_active",
+                    "is_deleted",
+                    "next_run_at",
+                    "updated_at",
+                ]
+            )
+        return "inactive_assignee", None
+
     if _active_pending_exists(series):
         return "pending_exists", None
 
@@ -316,6 +331,7 @@ def materialize_today_for_all(
     qs = ChecklistRecurringSeries.objects.filter(
         is_active=True,
         is_deleted=False,
+        assign_to__is_active=True,
     )
 
     if user_id:
@@ -368,7 +384,7 @@ def materialize_today_for_all(
                 result.add(series=series, note=reason)
                 continue
 
-            if reason == "inactive_or_deleted":
+            if reason in {"inactive_or_deleted", "inactive_assignee"}:
                 result.skipped_inactive += 1
             elif reason == "pending_exists":
                 result.skipped_pending_exists += 1
