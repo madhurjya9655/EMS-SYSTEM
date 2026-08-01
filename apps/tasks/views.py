@@ -119,6 +119,51 @@ def checklist_has_field(field_name: str) -> bool:
     except Exception:
         return False
 
+
+def task_model_has_field(model, field_name: str) -> bool:
+    try:
+        model._meta.get_field(field_name)
+        return True
+    except Exception:
+        return False
+
+
+def _soft_delete_task_queryset(qs, *, deleted_by=None, reason: str = "") -> int:
+    """Permanently remove task rows from active use without physical deletion."""
+    model = qs.model
+    values = {}
+
+    if task_model_has_field(model, "is_deleted"):
+        values["is_deleted"] = True
+    if task_model_has_field(model, "is_active"):
+        values["is_active"] = False
+    if task_model_has_field(model, "is_skipped_due_to_leave"):
+        values["is_skipped_due_to_leave"] = True
+    if task_model_has_field(model, "deleted_at"):
+        values["deleted_at"] = timezone.now()
+    if deleted_by is not None and task_model_has_field(model, "deleted_by"):
+        values["deleted_by"] = deleted_by
+    if task_model_has_field(model, "delete_reason"):
+        values["delete_reason"] = (reason or "Task permanently deleted")[:255]
+
+    if not values:
+        deleted, _ = qs.delete()
+        return int(deleted or 0)
+
+    return qs.update(**values)
+
+
+def _active_task_queryset(qs):
+    model = qs.model
+    filters = {}
+    if task_model_has_field(model, "is_deleted"):
+        filters["is_deleted"] = False
+    if task_model_has_field(model, "is_active"):
+        filters["is_active"] = True
+    if task_model_has_field(model, "is_skipped_due_to_leave"):
+        filters["is_skipped_due_to_leave"] = False
+    return qs.filter(**filters) if filters else qs
+
 # -----------------------------------------------------------------------------
 # Threads / utilities
 # -----------------------------------------------------------------------------
@@ -853,29 +898,21 @@ def _visible_for_current_leave_window(obj) -> bool:
 # -----------------------------------------------------------------------------
 # NEW: "void" helper
 # -----------------------------------------------------------------------------
-def _void_task_row(obj) -> None:
+def _void_task_row(obj, *, deleted_by=None, reason: str = "") -> int:
     """
-    Soft-delete a task row by setting is_skipped_due_to_leave=True.
+    Permanently remove one task from all active application behavior.
 
-    CRITICAL: uses queryset-level .update() instead of obj.save().
-    The Checklist/Delegation models override save() and call full_clean(),
-    which runs holiday and leave-window validation. If that validation raises
-    (e.g. task was on a holiday, or assignee's leave record changed),
-    the soft-delete silently fails and the row stays visible — AND the
-    recurrence generator cannot find it in _pending_check_q, so it
-    regenerates the "deleted" task next morning.
-
-    Using .update() writes directly to the DB, bypasses all model-level
-    hooks, and guarantees the row is marked. The row keeps status="Pending"
-    intentionally so _pending_check_q in tasks.py can find it and block
-    regeneration.
+    The row is retained only as deleted audit history. Background jobs and
+    active task lists exclude it using is_deleted=False and is_active=True.
     """
     if not obj:
-        return
-    if hasattr(obj, "is_skipped_due_to_leave"):
-        type(obj).objects.filter(pk=obj.pk).update(is_skipped_due_to_leave=True)
-        return
-    obj.delete()
+        return 0
+
+    return _soft_delete_task_queryset(
+        type(obj).objects.filter(pk=obj.pk),
+        deleted_by=deleted_by,
+        reason=reason or "Task permanently deleted by admin",
+    )
 
 
 # -----------------------------------------------------------------------------
@@ -2230,7 +2267,14 @@ def list_delegation(request):
             return_url = request.POST.get("return_url") or reverse("tasks:list_delegation")
             if ids:
                 try:
-                    deleted = Delegation.objects.filter(pk__in=ids).update(is_skipped_due_to_leave=True)
+                    scoped = Delegation.objects.filter(pk__in=ids)
+                    if not is_admin_user(request.user):
+                        scoped = scoped.filter(assign_to=request.user)
+                    deleted = _soft_delete_task_queryset(
+                        scoped,
+                        deleted_by=request.user,
+                        reason="Delegation permanently deleted",
+                    )
                     if deleted:
                         messages.success(request, f"Successfully deleted {deleted} delegation task(s).")
                     else:
@@ -2243,7 +2287,9 @@ def list_delegation(request):
         messages.warning(request, "Invalid action specified.")
         return redirect("tasks:list_delegation")
 
-    base_qs = Delegation.objects.select_related("assign_by", "assign_to").filter(is_skipped_due_to_leave=False)
+    base_qs = _active_task_queryset(
+        Delegation.objects.select_related("assign_by", "assign_to")
+    )
     status_param = (request.GET.get("status") or "").strip()
 
     if not status_param or status_param == "Pending":
@@ -2336,8 +2382,12 @@ def edit_delegation(request, pk):
 def delete_delegation(request, pk):
     obj = get_object_or_404(Delegation, pk=pk)
     if request.method == "POST":
-        _void_task_row(obj)
-        messages.success(request, f"Deleted delegation task '{obj.task_name}'.")
+        _void_task_row(
+            obj,
+            deleted_by=request.user,
+            reason="Delegation permanently deleted",
+        )
+        messages.success(request, f"Permanently deleted delegation task '{obj.task_name}'.")
         return redirect(request.GET.get("next", reverse("tasks:list_delegation")))
     return render(request, "tasks/confirm_delete.html", {"object": obj, "type": "Delegation"})
 
@@ -2489,7 +2539,14 @@ def list_help_ticket(request):
             ids = request.POST.getlist("sel")
             if ids:
                 try:
-                    deleted = HelpTicket.objects.filter(pk__in=ids).update(is_skipped_due_to_leave=True)
+                    scoped = HelpTicket.objects.filter(pk__in=ids)
+                    if not is_admin_user(request.user):
+                        scoped = scoped.filter(assign_by=request.user)
+                    deleted = _soft_delete_task_queryset(
+                        scoped,
+                        deleted_by=request.user,
+                        reason="Help ticket permanently deleted",
+                    )
                     if deleted:
                         messages.success(request, f"Successfully deleted {deleted} help ticket(s).")
                     else:
@@ -2502,7 +2559,9 @@ def list_help_ticket(request):
             messages.warning(request, "Invalid action specified.")
         return redirect("tasks:list_help_ticket")
 
-    qs = HelpTicket.objects.select_related("assign_by", "assign_to").filter(is_skipped_due_to_leave=False).exclude(status="Closed")
+    qs = _active_task_queryset(
+        HelpTicket.objects.select_related("assign_by", "assign_to")
+    ).exclude(status="Closed")
     if not can_create(request.user):
         qs = qs.filter(assign_to=request.user)
 
@@ -2542,7 +2601,7 @@ def list_help_ticket(request):
 @login_required
 def assigned_to_me(request):
     items = (
-        HelpTicket.objects.filter(assign_to=request.user, is_skipped_due_to_leave=False)
+        _active_task_queryset(HelpTicket.objects.filter(assign_to=request.user))
         .exclude(status="Closed")
         .select_related("assign_by", "assign_to")
         .order_by("-planned_date")
@@ -2558,7 +2617,14 @@ def assigned_by_me(request):
             ids = request.POST.getlist("sel")
             if ids:
                 try:
-                    deleted = HelpTicket.objects.filter(pk__in=ids, assign_by=request.user).update(is_skipped_due_to_leave=True)
+                    scoped = HelpTicket.objects.filter(pk__in=ids)
+                    if not is_admin_user(request.user):
+                        scoped = scoped.filter(assign_by=request.user)
+                    deleted = _soft_delete_task_queryset(
+                        scoped,
+                        deleted_by=request.user,
+                        reason="Help ticket permanently deleted",
+                    )
                     if deleted:
                         messages.success(request, f"Successfully deleted {deleted} help tickets(s).")
                     else:
@@ -2573,7 +2639,7 @@ def assigned_by_me(request):
 
     items = (
         HelpTicket.objects
-        .filter(assign_by=request.user, is_skipped_due_to_leave=False)
+        .filter(assign_by=request.user, is_deleted=False, is_active=True, is_skipped_due_to_leave=False)
         .select_related("assign_by", "assign_to")
         .order_by("-planned_date")
     )
@@ -2645,8 +2711,12 @@ def delete_help_ticket(request, pk):
         return redirect("tasks:assigned_by_me")
     if request.method == "POST":
         title = ticket.title
-        _void_task_row(ticket)
-        messages.success(request, f'Deleted help ticket "{title}".')
+        _void_task_row(
+            ticket,
+            deleted_by=request.user,
+            reason="Help ticket permanently deleted",
+        )
+        messages.success(request, f'Permanently deleted help ticket "{title}".')
         return redirect(request.GET.get("next", "tasks:assigned_by_me"))
     return render(request, "tasks/confirm_delete.html", {"object": ticket, "type": "Help Ticket"})
 
@@ -2745,8 +2815,43 @@ def bulk_upload(request):
 
 @login_required
 def list_fms(request):
-    items = FMS.objects.select_related("assign_by", "assign_to").order_by("-planned_date", "-id")
-    return render(request, "tasks/list_fms.html", {"items": items})
+    items = _active_task_queryset(
+        FMS.objects.select_related("assign_by", "assign_to")
+    ).order_by("-planned_date", "-id")
+
+    if not is_admin_user(request.user):
+        items = items.filter(assign_to=request.user)
+
+    return render(
+        request,
+        "tasks/list_fms.html",
+        {"items": items, "is_admin": is_admin_user(request.user)},
+    )
+
+
+@login_required
+def delete_fms(request, pk):
+    obj = get_object_or_404(FMS, pk=pk)
+
+    if not is_admin_user(request.user):
+        messages.error(request, "Only an admin can permanently delete FMS tasks.")
+        return redirect(reverse("tasks:list_fms"))
+
+    if request.method == "POST":
+        task_name = obj.task_name
+        _void_task_row(
+            obj,
+            deleted_by=request.user,
+            reason="FMS task permanently deleted",
+        )
+        messages.success(request, f"Permanently deleted FMS task '{task_name}'.")
+        return redirect(request.GET.get("next") or reverse("tasks:list_fms"))
+
+    return render(
+        request,
+        "tasks/confirm_delete.html",
+        {"object": obj, "type": "FMS"},
+    )
 
 
 @login_required

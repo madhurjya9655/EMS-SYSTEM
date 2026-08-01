@@ -22,6 +22,9 @@ from .models import Profile
 from .permission_urls import PERMISSION_URLS
 from .permissions import PERMISSIONS_STRUCTURE, _user_permission_codes, permissions_context
 from .utils import soft_delete_user
+from apps.tasks.services.employee_task_cleanup import (
+    soft_delete_all_tasks_for_employee,
+)
 
 User = get_user_model()
 logger = logging.getLogger(__name__)
@@ -75,6 +78,19 @@ def _fallback_deactivate_user(user: User, *, actor: Optional[User] = None) -> No
 
     This function preserves all linked history and only deactivates access.
     """
+    try:
+        soft_delete_all_tasks_for_employee(
+            user,
+            deleted_by=actor,
+            reason="User deactivated through fallback account cleanup",
+        )
+    except Exception:
+        logger.exception(
+            "Task cleanup failed during fallback deactivation for user_id=%s",
+            getattr(user, "id", None),
+        )
+        raise
+
     update_fields = []
 
     if getattr(user, "is_active", True):
@@ -190,31 +206,62 @@ def add_user(request: HttpRequest) -> HttpResponse:
 def edit_user(request: HttpRequest, pk: int) -> HttpResponse:
     user_obj = get_object_or_404(User, pk=pk)
     profile_obj: Optional[Profile] = Profile.objects.filter(user=user_obj).first()
+    was_active = bool(user_obj.is_active)
 
     if request.method == "POST":
         uf = UserForm(request.POST, instance=user_obj)
         pf = ProfileForm(request.POST, request.FILES, instance=profile_obj)
 
         if uf.is_valid() and pf.is_valid():
-            user = uf.save(commit=False)
-            pwd = uf.cleaned_data.get("password")
-            if pwd:
-                user.set_password(pwd)
-            user.save()
+            try:
+                with transaction.atomic():
+                    user = uf.save(commit=False)
+                    pwd = uf.cleaned_data.get("password")
+                    if pwd:
+                        user.set_password(pwd)
 
-            profile = pf.save(commit=False)
-            profile.user = user
-            profile.permissions = pf.cleaned_data.get("permissions") or []
-            profile.save()
+                    will_be_active = bool(user.is_active)
 
-            perms = set((pf.cleaned_data.get("permissions") or []))
-            has_any_kam = any(str(c).lower().startswith("kam_") for c in perms)
-            _set_kam_access(user, has_any_kam, actor=request.user)
+                    if was_active and not will_be_active:
+                        soft_delete_all_tasks_for_employee(
+                            user_obj,
+                            deleted_by=request.user,
+                            reason="Employee deactivated from user edit screen",
+                        )
 
-            messages.success(request, "User updated successfully.")
-            return redirect("users:list_users")
+                    user.save()
 
-        messages.error(request, "Please correct the errors below.")
+                    profile = pf.save(commit=False)
+                    profile.user = user
+                    profile.permissions = pf.cleaned_data.get("permissions") or []
+                    profile.save()
+
+                    perms = set((pf.cleaned_data.get("permissions") or []))
+                    has_any_kam = any(
+                        str(code).lower().startswith("kam_")
+                        for code in perms
+                    )
+                    _set_kam_access(
+                        user,
+                        has_any_kam and will_be_active,
+                        actor=request.user,
+                    )
+
+                messages.success(request, "User updated successfully.")
+                return redirect("users:list_users")
+
+            except Exception as exc:
+                logger.exception(
+                    "User update or task cleanup failed for user_id=%s: %s",
+                    user_obj.pk,
+                    exc,
+                )
+                messages.error(
+                    request,
+                    "User was not updated because assigned-task cleanup failed.",
+                )
+        else:
+            messages.error(request, "Please correct the errors below.")
     else:
         uf = UserForm(instance=user_obj)
         pf = ProfileForm(instance=profile_obj)
@@ -249,16 +296,24 @@ def delete_user(request: HttpRequest, pk: int) -> HttpResponse:
         if getattr(user, "is_superuser", False) and not getattr(request.user, "is_superuser", False):
             return HttpResponseForbidden("Only a superuser can delete another superuser.")
 
-        if not getattr(user, "is_active", True):
-            messages.info(request, "User is already inactive.")
-            return redirect("users:list_users")
-
         username = user.username
 
         try:
             with transaction.atomic():
+                cleanup = soft_delete_all_tasks_for_employee(
+                    user,
+                    deleted_by=request.user,
+                    reason="User permanently deleted from user management",
+                )
                 soft_delete_user(user, performed_by=request.user)
-            messages.success(request, f"User '{username}' deleted (soft) and anonymized.")
+            messages.success(
+                request,
+                (
+                    f"User '{username}' deleted and anonymized. "
+                    f"Stopped {cleanup['recurring_series_stopped']} recurring series "
+                    "and permanently retired all assigned tasks."
+                ),
+            )
         except ProtectedError:
             logger.warning(
                 "ProtectedError while deleting user_id=%s. Falling back to safe deactivation.",
@@ -307,20 +362,57 @@ def delete_user(request: HttpRequest, pk: int) -> HttpResponse:
 @require_http_methods(["GET", "POST"])
 def toggle_active(request: HttpRequest, pk: int) -> HttpResponse:
     u = get_object_or_404(User, pk=pk)
+
     if u == request.user:
         messages.error(request, "You cannot deactivate your own account.")
         return redirect("users:list_users")
-    if getattr(u, "is_superuser", False) and not getattr(request.user, "is_superuser", False):
-        return HttpResponseForbidden("Only a superuser can change another superuser's status.")
 
-    u.is_active = not u.is_active
-    u.save(update_fields=["is_active"])
+    if (
+        getattr(u, "is_superuser", False)
+        and not getattr(request.user, "is_superuser", False)
+    ):
+        return HttpResponseForbidden(
+            "Only a superuser can change another superuser's status."
+        )
 
-    messages.success(request, f"User {'activated' if u.is_active else 'deactivated'} successfully.")
+    new_active_state = not bool(u.is_active)
+
+    try:
+        with transaction.atomic():
+            if not new_active_state:
+                soft_delete_all_tasks_for_employee(
+                    u,
+                    deleted_by=request.user,
+                    reason="User deactivated from user management",
+                )
+                _set_kam_access(u, False, actor=request.user)
+
+            u.is_active = new_active_state
+            u.save(update_fields=["is_active"])
+
+        messages.success(
+            request,
+            f"User {'activated' if u.is_active else 'deactivated'} successfully.",
+        )
+
+    except Exception as exc:
+        logger.exception(
+            "Status change or task cleanup failed for user_id=%s: %s",
+            u.pk,
+            exc,
+        )
+        messages.error(
+            request,
+            "User status was not changed because assigned-task cleanup failed.",
+        )
 
     nxt = request.GET.get("next") or request.POST.get("next")
-    if nxt and url_has_allowed_host_and_scheme(nxt, allowed_hosts={request.get_host()}):
+    if nxt and url_has_allowed_host_and_scheme(
+        nxt,
+        allowed_hosts={request.get_host()},
+    ):
         return redirect(nxt)
+
     return redirect("users:list_users")
 
 

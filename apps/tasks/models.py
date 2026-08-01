@@ -657,6 +657,39 @@ class Delegation(models.Model):
     # This occurrence was skipped due to leave.
     is_skipped_due_to_leave = models.BooleanField(default=False, db_index=True)
 
+    # -----------------------------------------------------------------------
+    # Permanent soft-delete lifecycle
+    # -----------------------------------------------------------------------
+    # Deleted tasks remain in the database for audit/history but are excluded
+    # from every active queue, reminder, email, dashboard and scheduler.
+    is_deleted = models.BooleanField(default=False, db_index=True)
+    is_active = models.BooleanField(default=True, db_index=True)
+    deleted_at = models.DateTimeField(null=True, blank=True)
+    deleted_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="%(class)s_deleted_tasks",
+    )
+    delete_reason = models.CharField(max_length=255, blank=True)
+
+    def soft_delete(self, *, user=None, reason=""):
+        type(self).objects.filter(pk=self.pk).update(
+            is_deleted=True,
+            is_active=False,
+            is_skipped_due_to_leave=True,
+            deleted_at=timezone.now(),
+            deleted_by=user,
+            delete_reason=(reason or "Task permanently deleted")[:255],
+        )
+        self.is_deleted = True
+        self.is_active = False
+        self.is_skipped_due_to_leave = True
+        self.deleted_at = timezone.now()
+        self.deleted_by = user
+        self.delete_reason = (reason or "Task permanently deleted")[:255]
+
     # Kept for DB compatibility, but delegations are treated as one-time tasks.
     mode = models.CharField(
         max_length=10,
@@ -691,6 +724,8 @@ class Delegation(models.Model):
             models.Index(fields=["assign_to", "status", "planned_date"]),
             models.Index(fields=["is_skipped_due_to_leave", "planned_date"]),
             models.Index(fields=["status", "set_reminder", "reminder_time"]),
+            models.Index(fields=["is_deleted", "is_active", "planned_date"]),
+            models.Index(fields=["assign_to", "is_deleted", "is_active"]),
         ]
 
     @classmethod
@@ -833,6 +868,39 @@ class FMS(models.Model):
 
     is_skipped_due_to_leave = models.BooleanField(default=False, db_index=True)
 
+    # -----------------------------------------------------------------------
+    # Permanent soft-delete lifecycle
+    # -----------------------------------------------------------------------
+    # Deleted tasks remain in the database for audit/history but are excluded
+    # from every active queue, reminder, email, dashboard and scheduler.
+    is_deleted = models.BooleanField(default=False, db_index=True)
+    is_active = models.BooleanField(default=True, db_index=True)
+    deleted_at = models.DateTimeField(null=True, blank=True)
+    deleted_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="%(class)s_deleted_tasks",
+    )
+    delete_reason = models.CharField(max_length=255, blank=True)
+
+    def soft_delete(self, *, user=None, reason=""):
+        type(self).objects.filter(pk=self.pk).update(
+            is_deleted=True,
+            is_active=False,
+            is_skipped_due_to_leave=True,
+            deleted_at=timezone.now(),
+            deleted_by=user,
+            delete_reason=(reason or "Task permanently deleted")[:255],
+        )
+        self.is_deleted = True
+        self.is_active = False
+        self.is_skipped_due_to_leave = True
+        self.deleted_at = timezone.now()
+        self.deleted_by = user
+        self.delete_reason = (reason or "Task permanently deleted")[:255]
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -840,6 +908,8 @@ class FMS(models.Model):
         indexes = [
             models.Index(fields=["assign_to", "status", "planned_date"]),
             models.Index(fields=["is_skipped_due_to_leave", "planned_date"]),
+            models.Index(fields=["is_deleted", "is_active", "planned_date"]),
+            models.Index(fields=["assign_to", "is_deleted", "is_active"]),
         ]
 
     def clean(self):
@@ -904,6 +974,39 @@ class HelpTicket(models.Model):
 
     is_skipped_due_to_leave = models.BooleanField(default=False, db_index=True)
 
+    # -----------------------------------------------------------------------
+    # Permanent soft-delete lifecycle
+    # -----------------------------------------------------------------------
+    # Deleted tasks remain in the database for audit/history but are excluded
+    # from every active queue, reminder, email, dashboard and scheduler.
+    is_deleted = models.BooleanField(default=False, db_index=True)
+    is_active = models.BooleanField(default=True, db_index=True)
+    deleted_at = models.DateTimeField(null=True, blank=True)
+    deleted_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="%(class)s_deleted_tasks",
+    )
+    delete_reason = models.CharField(max_length=255, blank=True)
+
+    def soft_delete(self, *, user=None, reason=""):
+        type(self).objects.filter(pk=self.pk).update(
+            is_deleted=True,
+            is_active=False,
+            is_skipped_due_to_leave=True,
+            deleted_at=timezone.now(),
+            deleted_by=user,
+            delete_reason=(reason or "Task permanently deleted")[:255],
+        )
+        self.is_deleted = True
+        self.is_active = False
+        self.is_skipped_due_to_leave = True
+        self.deleted_at = timezone.now()
+        self.deleted_by = user
+        self.delete_reason = (reason or "Task permanently deleted")[:255]
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -911,6 +1014,8 @@ class HelpTicket(models.Model):
         indexes = [
             models.Index(fields=["assign_to", "status", "planned_date"]),
             models.Index(fields=["is_skipped_due_to_leave", "planned_date"]),
+            models.Index(fields=["is_deleted", "is_active", "planned_date"]),
+            models.Index(fields=["assign_to", "is_deleted", "is_active"]),
         ]
 
     @classmethod
