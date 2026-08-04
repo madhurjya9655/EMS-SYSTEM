@@ -5398,13 +5398,6 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
                     )
                     return redirect(reverse("kam:plan"))
 
-                if not manual_location:
-                    messages.error(
-                        request,
-                        f"Location is required for new customer: {manual_name}",
-                    )
-                    return redirect(reverse("kam:plan"))
-
                 manual_expected_sales = _parse_decimal_or_none(manual_expected_sales_raw)
                 manual_expected_collection = _parse_decimal_or_none(manual_expected_collection_raw)
 
@@ -5505,13 +5498,6 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
                         or request.POST.get(f"purpose_{customer.id}")
                         or ""
                     ).strip()
-
-                    if not line_location:
-                        messages.error(
-                            request,
-                            f"Location is required for customer: {customer.name}",
-                        )
-                        return redirect(reverse("kam:plan"))
 
                     try:
                         _require_purpose_of_visit(
@@ -5678,14 +5664,6 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
                             messages.error(
                                 request,
                                 f"Expected Collection (₹) is invalid for customer: {customer.name}",
-                            )
-                            transaction.set_rollback(True)
-                            return redirect(reverse("kam:plan"))
-
-                        if not location:
-                            messages.error(
-                                request,
-                                f"Location is required for customer: {customer.name}",
                             )
                             transaction.set_rollback(True)
                             return redirect(reverse("kam:plan"))

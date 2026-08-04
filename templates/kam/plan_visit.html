@@ -254,7 +254,7 @@
             <thead>
               <tr>
                 <th style="width: 20%;">Customer</th>
-                <th style="width: 20%;">Location <span class="required">*</span></th>
+                <th style="width: 20%;">Location</th>
                 <th style="width: 26%;">Purpose of Visit <span class="required">*</span></th>
                 <th style="width: 12%;">Expected Sales (MT)</th>
                 <th style="width: 14%;">Expected Collection</th>
@@ -533,7 +533,7 @@
           <div class="bulk-customer-name">${safeName}</div>
           <div class="bulk-customer-meta">${safeCode}</div>
         </td>
-        <td><textarea class="form-control" name="location_${safeId}" rows="2" required>${safeLocation}</textarea></td>
+        <td><textarea class="form-control" name="location_${safeId}" rows="2">${safeLocation}</textarea></td>
         <td><textarea class="form-control bulk-line-purpose" name="purpose_${safeId}" rows="2" placeholder="Purpose of Visit" required>${esc(batchPurposeField ? batchPurposeField.value : "")}</textarea></td>
         <td><input class="form-control" type="number" step="0.001" min="0" name="expected_sales_mt_${safeId}" placeholder="0.000"></td>
         <td><input class="form-control" type="number" step="0.01" min="0" name="expected_collection_${safeId}" placeholder="0.00"></td>
@@ -565,7 +565,7 @@
           <input type="hidden" name="batch_manual_gst[]" value="${esc(gst)}">
           <div class="bulk-customer-meta mt-1">${esc(meta || "New customer")}</div>
         </td>
-        <td><textarea class="form-control" name="batch_manual_location[]" rows="2" placeholder="Location" required>${esc(location)}</textarea></td>
+        <td><textarea class="form-control" name="batch_manual_location[]" rows="2" placeholder="Location">${esc(location)}</textarea></td>
         <td><textarea class="form-control bulk-line-purpose" name="batch_manual_purpose[]" rows="2" placeholder="Purpose of Visit" required>${esc(batchPurposeField ? batchPurposeField.value : "")}</textarea></td>
         <td><input class="form-control" type="number" step="0.001" min="0" name="batch_manual_expected_sales_mt[]" placeholder="0.000"></td>
         <td><input class="form-control" type="number" step="0.01" min="0" name="batch_manual_expected_collection[]" placeholder="0.00"></td>

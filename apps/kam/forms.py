@@ -94,6 +94,7 @@ class VisitPlanForm(forms.ModelForm):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
+        self.fields["location"].required = False
         self.fields["purpose"].required = True
         self.fields["purpose"].label = "Purpose of Visit"
 
@@ -244,7 +245,7 @@ class SingleVisitForm(forms.ModelForm):
         self.fields["customer"].required = False
 
         self.fields["counterparty_name"].required = False
-        self.fields["location"].required = True
+        self.fields["location"].required = False
         self.fields["purpose"].required = True
         self.fields["purpose"].label = "Purpose of Visit"
 
@@ -336,9 +337,7 @@ class SingleVisitForm(forms.ModelForm):
         if not visit_date:
             self.add_error("visit_date", "Visit Date is required.")
 
-        if not location:
-            self.add_error("location", "Location is required.")
-        elif len(location) > 1000:
+        if len(location) > 1000:
             self.add_error("location", "Location is too long (max 1000 characters).")
         else:
             data["location"] = location
