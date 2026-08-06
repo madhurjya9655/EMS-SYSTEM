@@ -10,7 +10,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from apps.tasks.models import Checklist, ChecklistRecurringSeries
-from apps.tasks.recurrence_utils import get_next_planned_date
+from apps.tasks.recurrence_utils import get_next_planned_date, normalize_mode
 from apps.tasks.services.blocking import guard_assign
 from apps.tasks.services.holiday_guard import (
     get_holiday_status,
@@ -193,6 +193,7 @@ def create_occurrence_from_series(
 def _active_pending_exists(
     series: ChecklistRecurringSeries,
 ) -> bool:
+    """Return True when the series has any active pending occurrence."""
     return Checklist.objects.filter(
         recurring_series=series,
         status="Pending",
@@ -200,6 +201,25 @@ def _active_pending_exists(
         is_active=True,
         is_skipped_due_to_leave=False,
     ).exists()
+
+
+def _pending_occurrence_blocks_generation(
+    series: ChecklistRecurringSeries,
+) -> bool:
+    """
+    Decide whether an existing pending occurrence blocks the next occurrence.
+
+    Daily checklist series must continue producing one occurrence per valid
+    recurrence date even when an older occurrence remains Pending. Same-date
+    duplicates are still prevented later by _occurrence_exists().
+
+    Weekly, Monthly and Yearly series retain the existing completion-gated
+    behaviour: one active pending occurrence blocks another occurrence.
+    """
+    if normalize_mode(series.mode) == "Daily":
+        return False
+
+    return _active_pending_exists(series)
 
 
 def _latest_completed(
@@ -420,7 +440,7 @@ def generate_one_series(
             reason="inactive_assignee",
         )
 
-    if _active_pending_exists(series):
+    if _pending_occurrence_blocks_generation(series):
         return GenerationResult(
             series_id=series.id,
             created=False,
