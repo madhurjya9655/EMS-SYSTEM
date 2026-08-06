@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime
+import logging
 import threading
 from datetime import timedelta
 from typing import Any, Dict
@@ -14,6 +15,7 @@ from django.http import JsonResponse, HttpResponseForbidden
 from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
+logger = logging.getLogger(__name__)
 
 # Weekly performance services
 from apps.tasks.services.weekly_performance import (
@@ -28,6 +30,7 @@ from apps.tasks.tasks import (
     pre10am_unblock_and_generate,     # 09:55 IST safeguard
 )
 
+from apps.tasks.services.holiday_guard import get_holiday_status
 # Optional lightweight “today-only” materializer (safe, no emails)
 try:
     from apps.tasks.materializer import materialize_today_for_all  # type: ignore
@@ -132,19 +135,23 @@ def _release_fanout_lock(day_iso: str) -> None:
 # -----------------------------------------------------------------------------
 def _run_due_today_pipeline(day_iso: str) -> Dict[str, Any]:
     """
-    Canonical pipeline for 10:00 IST fan-out.
+    Canonical pipeline for the 10:00 IST fan-out.
 
-    Order of operations (best-effort, each step isolated so one failure doesn’t kill run):
-      0) Materialize missing *today* rows for recurring series (no emails)
-      1) Generate *future* recurring rows (generator never creates today)
-      2) Send due-today emails (leave-aware + its own per-day guards)
+    Holiday Calendar is the master validation.
 
-    Guarantees:
-      - This pipeline marks DONE for the day once it finishes.
-      - This pipeline stores a small result payload in cache for debugging.
-      - Lock is always released.
+    On an official holiday or Sunday:
+    - no checklist occurrence is materialized;
+    - no recurring checklist is generated;
+    - no due-today reminder email is sent;
+    - no existing task is changed.
+
+    Working-day order:
+      0) Materialize missing today rows.
+      1) Generate future recurring rows.
+      2) Send due-today emails.
     """
     started_at = timezone.now().isoformat()
+    holiday_status = get_holiday_status(timezone.now())
 
     payload: Dict[str, Any] = {
         "ok": True,
@@ -157,34 +164,118 @@ def _run_due_today_pipeline(day_iso: str) -> Dict[str, Any]:
     }
 
     try:
-        # 0) Today-only materialization (no emails)
+        if holiday_status["is_off_day"]:
+            logger_message = (
+                "Checklist generation skipped - Official Holiday | "
+                f"Holiday detected: "
+                f"{holiday_status['date'].isoformat()} | "
+                f"Holiday Name: "
+                f"{holiday_status['holiday_name'] or 'Sunday'} | "
+                "Scheduler: _run_due_today_pipeline"
+            )
+
+            logger.info(logger_message)
+
+            payload.update(
+                {
+                    "skipped": True,
+                    "reason": holiday_status["reason"],
+                    "holiday_name": holiday_status[
+                        "holiday_name"
+                    ],
+                    "materialized": {
+                        "created": 0,
+                        "skipped": True,
+                        "reason": holiday_status["reason"],
+                    },
+                    "generated": {
+                        "checked": 0,
+                        "created": 0,
+                        "skipped": True,
+                        "reason": holiday_status["reason"],
+                    },
+                    "fanout": {
+                        "sent": 0,
+                        "skipped": True,
+                        "reason": holiday_status["reason"],
+                    },
+                }
+            )
+
+            try:
+                _mark_fanout_done(day_iso)
+            except Exception:
+                pass
+
+            return payload
+
         try:
             if callable(materialize_today_for_all):
-                mat_res = materialize_today_for_all(dry_run=False)
-                payload["materialized"] = getattr(mat_res, "as_dict", lambda: getattr(mat_res, "__dict__", {}))()
+                materialize_result = materialize_today_for_all(
+                    dry_run=False
+                )
+
+                payload["materialized"] = getattr(
+                    materialize_result,
+                    "as_dict",
+                    lambda: getattr(
+                        materialize_result,
+                        "__dict__",
+                        {},
+                    ),
+                )()
+
             else:
-                payload["materialized"] = {"skipped": True, "reason": "materializer_unavailable"}
-        except Exception as e:
-            payload["materialized"] = {"ok": False, "error": str(e)}
-            payload["errors"].append(f"materialize:{type(e).__name__}:{e}")
+                payload["materialized"] = {
+                    "skipped": True,
+                    "reason": "materializer_unavailable",
+                }
 
-        # 1) Future generator (never creates today)
+        except Exception as exc:
+            payload["materialized"] = {
+                "ok": False,
+                "error": str(exc),
+            }
+            payload["errors"].append(
+                f"materialize:"
+                f"{type(exc).__name__}:"
+                f"{exc}"
+            )
+
         try:
-            gen_res = generate_recurring_checklists.run(dry_run=False)
-            payload["generated"] = gen_res
-        except Exception as e:
-            payload["generated"] = {"ok": False, "error": str(e)}
-            payload["errors"].append(f"generate:{type(e).__name__}:{e}")
+            generation_result = (
+                generate_recurring_checklists.run(
+                    dry_run=False
+                )
+            )
+            payload["generated"] = generation_result
 
-        # 2) Fan-out (task itself has “after 10 AM IST” guard + internal dedupe)
+        except Exception as exc:
+            payload["generated"] = {
+                "ok": False,
+                "error": str(exc),
+            }
+            payload["errors"].append(
+                f"generate:"
+                f"{type(exc).__name__}:"
+                f"{exc}"
+            )
+
         try:
-            fanout_res = send_due_today_assignments.run()
-            payload["fanout"] = fanout_res
-        except Exception as e:
-            payload["fanout"] = {"ok": False, "error": str(e)}
-            payload["errors"].append(f"fanout:{type(e).__name__}:{e}")
+            fanout_result = send_due_today_assignments.run()
+            payload["fanout"] = fanout_result
 
-        # Mark done even if some steps failed — to prevent repeated retries spamming users.
+        except Exception as exc:
+            payload["fanout"] = {
+                "ok": False,
+                "error": str(exc),
+            }
+            payload["errors"].append(
+                f"fanout:"
+                f"{type(exc).__name__}:"
+                f"{exc}"
+            )
+
         try:
             _mark_fanout_done(day_iso)
         except Exception:
@@ -193,48 +284,122 @@ def _run_due_today_pipeline(day_iso: str) -> Dict[str, Any]:
         return payload
 
     finally:
-        payload["finished_at"] = timezone.now().isoformat()
-        _store_fanout_result(day_iso, payload)
-        _release_fanout_lock(day_iso)
+        payload["finished_at"] = (
+            timezone.now().isoformat()
+        )
+
+        _store_fanout_result(
+            day_iso,
+            payload,
+        )
+
+        _release_fanout_lock(
+            day_iso,
+        )
 
 
-def start_due_today_fanout(*, day_iso: str, background: bool = True) -> Dict[str, Any]:
+def start_due_today_fanout(
+    *,
+    day_iso: str,
+    background: bool = True,
+) -> Dict[str, Any]:
     """
-    Public trigger used by BOTH cron entrypoints (views_cron.py and cron_views.py).
+    Public trigger used by both cron entrypoints.
 
-    - If already done today -> no-op.
-    - If already running -> no-op.
-    - Else -> acquire lock and run pipeline (background thread by default).
-
-    Returns a small dict suitable for JSON response.
+    Holiday Calendar is checked before:
+    - acquiring a fan-out lock;
+    - creating a background thread;
+    - materializing checklist rows;
+    - generating recurring checklist rows;
+    - sending reminder emails.
     """
-    if not getattr(settings, "FEATURE_EMAIL_NOTIFICATIONS", True):
-        return {"ok": True, "accepted": False, "reason": "feature_flag_off", "day": day_iso}
+    holiday_status = get_holiday_status(
+        timezone.now()
+    )
+
+    if holiday_status["is_off_day"]:
+        logger.info(
+            "Checklist generation skipped - Official Holiday | "
+            "Holiday detected: %s | Holiday Name: %s | "
+            "Scheduler: start_due_today_fanout",
+            holiday_status["date"].isoformat(),
+            holiday_status["holiday_name"] or "Sunday",
+        )
+
+        logger.info(
+            "Checklist reminder skipped - Official Holiday | "
+            "Holiday detected: %s | Holiday Name: %s | "
+            "Scheduler: start_due_today_fanout",
+            holiday_status["date"].isoformat(),
+            holiday_status["holiday_name"] or "Sunday",
+        )
+
+        return {
+            "ok": True,
+            "accepted": False,
+            "reason": holiday_status["reason"],
+            "day": holiday_status["date"].isoformat(),
+            "holiday_name": holiday_status["holiday_name"],
+        }
+
+    if not getattr(
+        settings,
+        "FEATURE_EMAIL_NOTIFICATIONS",
+        True,
+    ):
+        return {
+            "ok": True,
+            "accepted": False,
+            "reason": "feature_flag_off",
+            "day": day_iso,
+        }
 
     if _fanout_already_done(day_iso):
-        return {"ok": True, "accepted": False, "reason": "already_done_today", "day": day_iso}
+        return {
+            "ok": True,
+            "accepted": False,
+            "reason": "already_done_today",
+            "day": day_iso,
+        }
 
     if not _acquire_fanout_lock(day_iso):
-        return {"ok": True, "accepted": False, "reason": "already_running", "day": day_iso}
+        return {
+            "ok": True,
+            "accepted": False,
+            "reason": "already_running",
+            "day": day_iso,
+        }
 
     if not background:
-        result = _run_due_today_pipeline(day_iso)
-        return {"ok": True, "accepted": True, "day": day_iso, "mode": "inline", "result": result}
+        result = _run_due_today_pipeline(
+            day_iso
+        )
 
-    t = threading.Thread(
+        return {
+            "ok": True,
+            "accepted": True,
+            "day": day_iso,
+            "mode": "inline",
+            "result": result,
+        }
+
+    thread = threading.Thread(
         target=_run_due_today_pipeline,
         args=(day_iso,),
         daemon=True,
         name="cron-due-today-bg",
     )
-    t.start()
+    thread.start()
 
     return {
         "ok": True,
         "accepted": True,
         "day": day_iso,
         "mode": "background_thread",
-        "note": "Fan-out pipeline started in background (materialize -> generate -> send).",
+        "note": (
+            "Fan-out pipeline started in background "
+            "(materialize -> generate -> send)."
+        ),
     }
 
 

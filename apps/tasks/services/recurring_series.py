@@ -12,7 +12,10 @@ from django.utils import timezone
 from apps.tasks.models import Checklist, ChecklistRecurringSeries
 from apps.tasks.recurrence_utils import get_next_planned_date
 from apps.tasks.services.blocking import guard_assign
-from apps.tasks.services.holiday_guard import is_holiday_for_user
+from apps.tasks.services.holiday_guard import (
+    get_holiday_status,
+    is_holiday_for_user,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -545,10 +548,41 @@ def generate_due_series(
     """
     Inspect active recurring-series masters and generate missing occurrences.
 
-    All active masters are inspected instead of filtering only by
-    next_run_at <= now. This preserves completion-gated behavior where the next
-    future occurrence is created immediately after the previous one completes.
+    Holiday Calendar rule:
+    - The current IST date is checked once before any recurring-series query.
+    - On an official holiday or Sunday, no series is inspected.
+    - No Checklist occurrence is created.
+    - No next_run_at value is changed.
+    - No existing Checklist row is changed.
+
+    All active masters are inspected on working days instead of filtering only
+    by next_run_at <= now. This preserves the existing completion-gated
+    recurrence behavior.
     """
+    now = timezone.now()
+    holiday_status = get_holiday_status(now)
+
+    if holiday_status["is_off_day"]:
+        logger.info(
+            "Checklist generation skipped - Official Holiday | "
+            "Holiday detected: %s | Holiday Name: %s | "
+            "Scheduler: generate_due_series",
+            holiday_status["date"].isoformat(),
+            holiday_status["holiday_name"] or "Sunday",
+        )
+
+        return {
+            "checked": 0,
+            "created": 0,
+            "dry_run": dry_run,
+            "user_id": user_id,
+            "skipped": True,
+            "reason": holiday_status["reason"],
+            "day": holiday_status["date"].isoformat(),
+            "holiday_name": holiday_status["holiday_name"],
+            "results": [],
+        }
+
     try:
         limit = max(int(limit or 1000), 1)
     except (TypeError, ValueError):
@@ -580,6 +614,7 @@ def generate_due_series(
                 series_id,
                 dry_run=dry_run,
             )
+
         except Exception as exc:
             logger.exception(
                 "Recurring generation failed for series_id=%s",
@@ -604,5 +639,7 @@ def generate_due_series(
         "created": created,
         "dry_run": dry_run,
         "user_id": user_id,
+        "skipped": False,
+        "day": holiday_status["date"].isoformat(),
         "results": results,
     }

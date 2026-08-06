@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 from datetime import date, datetime, time as dt_time
-from typing import Optional
+from typing import Optional, TypedDict
 
 import pytz
 from django.db.utils import OperationalError, ProgrammingError
@@ -15,6 +15,73 @@ logger = logging.getLogger(__name__)
 
 IST = pytz.timezone("Asia/Kolkata")
 ASSIGN_ANCHOR_T = dt_time(10, 0)
+
+class HolidayStatus(TypedDict):
+    date: date
+    is_off_day: bool
+    is_official_holiday: bool
+    is_sunday: bool
+    holiday_name: str
+    reason: str
+
+
+def get_holiday_status(
+    value: Optional[datetime | date] = None,
+) -> HolidayStatus:
+    """
+    Retrieve the current IST off-day status with one Holiday-table query.
+
+    This helper should be called once at the beginning of each scheduler
+    execution and its result reused throughout that scheduler run.
+    """
+    target_date = to_ist_date(value)
+    sunday = is_sunday(target_date)
+
+    holiday_name = ""
+
+    try:
+        holiday_row = (
+            Holiday.objects
+            .filter(date=target_date)
+            .values("name")
+            .first()
+        )
+
+        if holiday_row:
+            holiday_name = str(
+                holiday_row.get("name") or ""
+            ).strip()
+
+    except (OperationalError, ProgrammingError):
+        logger.exception(
+            "Holiday table not ready while checking date=%s",
+            target_date,
+        )
+
+    except Exception:
+        logger.exception(
+            "Holiday lookup failed for date=%s",
+            target_date,
+        )
+
+    is_official_holiday = bool(holiday_name)
+    is_off_day = sunday or is_official_holiday
+
+    if is_official_holiday:
+        reason = "official_holiday"
+    elif sunday:
+        reason = "sunday"
+    else:
+        reason = ""
+
+    return {
+        "date": target_date,
+        "is_off_day": is_off_day,
+        "is_official_holiday": is_official_holiday,
+        "is_sunday": sunday,
+        "holiday_name": holiday_name,
+        "reason": reason,
+    }
 
 
 def ensure_project_aware(value: datetime) -> datetime:

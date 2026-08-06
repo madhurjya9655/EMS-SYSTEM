@@ -26,7 +26,11 @@ from .utils import (
     _fmt_dt_date,
 )
 from apps.tasks.services.blocking import guard_assign
-from apps.tasks.services.holiday_guard import is_holiday_for_user, holiday_skip_reason
+from apps.tasks.services.holiday_guard import (
+    get_holiday_status,
+    holiday_skip_reason,
+    is_holiday_for_user,
+)
 from apps.tasks.services.recurring_series import generate_due_series
 
 logger = logging.getLogger(__name__)
@@ -1179,33 +1183,100 @@ def auto_unblock_overdue_dailies(*, user_id: int | None = None, dry_run: bool = 
 
     return {"affected": updated, "user_id": user_id, "dry_run": False}
 
+def pre10am_unblock_and_generate(
+    *,
+    user_id: int | None = None,
+) -> dict:
+    """
+    Run the pre-10 AM checklist maintenance workflow.
 
-def pre10am_unblock_and_generate(*, user_id: int | None = None) -> dict:
-    from apps.tasks.materializer import materialize_today_for_all
+    On an official holiday or Sunday:
+    - do not complete overdue daily tasks;
+    - do not materialize checklist occurrences;
+    - do not generate recurring checklist occurrences;
+    - do not change existing tasks or recurring-series schedules.
+    """
+    now_ist = _now_ist()
+    holiday_status = get_holiday_status(
+        now_ist
+    )
 
-    res_unblock = auto_unblock_overdue_dailies(
+    if holiday_status["is_off_day"]:
+        logger.info(
+            _safe_console_text(
+                "Checklist generation skipped - Official Holiday | "
+                f"Holiday detected: "
+                f"{holiday_status['date'].isoformat()} | "
+                f"Holiday Name: "
+                f"{holiday_status['holiday_name'] or 'Sunday'} | "
+                "Scheduler: pre10am_unblock_and_generate"
+            )
+        )
+
+        return {
+            "ok": True,
+            "skipped": True,
+            "reason": holiday_status["reason"],
+            "day": holiday_status["date"].isoformat(),
+            "holiday_name": holiday_status[
+                "holiday_name"
+            ],
+            "user_id": user_id,
+            "unblock": {
+                "affected": 0,
+                "skipped": True,
+                "reason": holiday_status["reason"],
+            },
+            "materialize_today": {
+                "created": 0,
+                "skipped": True,
+                "reason": holiday_status["reason"],
+            },
+            "generate": {
+                "checked": 0,
+                "created": 0,
+                "skipped": True,
+                "reason": holiday_status["reason"],
+            },
+        }
+
+    from apps.tasks.materializer import (
+        materialize_today_for_all,
+    )
+
+    unblock_result = auto_unblock_overdue_dailies(
         user_id=user_id,
         dry_run=False,
     )
-    res_materialize = materialize_today_for_all(
+
+    materialize_result = materialize_today_for_all(
         user_id=user_id,
         dry_run=False,
     ).as_dict()
-    res_gen = _generate_recurring_checklists_sync(
-        user_id=user_id,
-        dry_run=False,
+
+    generation_result = (
+        _generate_recurring_checklists_sync(
+            user_id=user_id,
+            dry_run=False,
+        )
     )
 
-    out = {
+    result = {
         "ok": True,
-        "unblock": res_unblock,
-        "materialize_today": res_materialize,
-        "generate": res_gen,
+        "skipped": False,
+        "day": holiday_status["date"].isoformat(),
+        "unblock": unblock_result,
+        "materialize_today": materialize_result,
+        "generate": generation_result,
     }
 
-    logger.info(_safe_console_text(f"[PRE10] {out}"))
+    logger.info(
+        _safe_console_text(
+            f"[PRE10] {result}"
+        )
+    )
 
-    return out
+    return result
 
 
 @shared_task(bind=True, max_retries=1, default_retry_delay=30)

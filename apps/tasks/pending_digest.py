@@ -22,6 +22,8 @@ from .utils import (
     _dedupe_emails,
 )
 
+from apps.tasks.services.holiday_guard import get_holiday_status
+
 # ---------------------------------------------------------------------------
 # Central email guards.
 # These are config-driven guards. If unavailable, fallback keeps mail working.
@@ -644,12 +646,17 @@ def send_daily_employee_pending_digest(
     to_override: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
-    Sends one pending task email per employee.
+    Send one pending-task digest per employee.
 
-    Rules:
+    Mandatory Holiday Calendar rule:
+    - Sundays and configured holidays are always skipped.
+    - force=True must never bypass the Holiday Calendar.
+    - force=True may bypass only idempotency, leave suppression and empty-row
+      suppression, preserving the existing manual-support behavior.
+
+    Other existing rules:
     - Only planned_date <= today IST is included.
-    - User is skipped if on leave today, unless force=True.
-    - Sundays and holidays are skipped unless force=True.
+    - User is skipped when on leave unless force=True.
     - Idempotency is enforced per user per day unless force=True.
     """
     if not _email_notifications_enabled():
@@ -658,34 +665,51 @@ def send_daily_employee_pending_digest(
                 "[PENDING DIGEST] Skipped: email notifications disabled"
             )
         )
+
         return {
             "ok": True,
+            "sent": 0,
             "skipped": True,
             "reason": "email_notifications_disabled",
         }
 
-    today = _today_ist()
+    now_ist = _now_ist_dt()
+    holiday_status = get_holiday_status(now_ist)
+    today = holiday_status["date"]
     day_iso = today.isoformat()
 
-    if not force and not _is_working_day_ist(today):
+    # IMPORTANT:
+    # Holiday protection is mandatory and is intentionally outside every
+    # force-related condition.
+    if holiday_status["is_off_day"]:
         logger.info(
             _safe_console_text(
-                f"[PENDING DIGEST] Skipped: non-working day {day_iso}"
+                "Checklist reminder skipped - Official Holiday | "
+                f"Holiday detected: {day_iso} | "
+                f"Holiday Name: "
+                f"{holiday_status['holiday_name'] or 'Sunday'} | "
+                "Scheduler: send_daily_employee_pending_digest"
             )
         )
+
         return {
             "ok": True,
+            "sent": 0,
             "skipped": True,
-            "reason": "non_working_day",
+            "reason": holiday_status["reason"],
             "day": day_iso,
+            "holiday_name": holiday_status["holiday_name"],
         }
 
     User = get_user_model()
 
-    users_qs = User.objects.filter(is_active=True)
+    users_qs = User.objects.filter(
+        is_active=True,
+    )
 
     if username:
         username_clean = username.strip()
+
         users_qs = users_qs.filter(
             Q(username=username_clean)
             | Q(email__iexact=username_clean)
@@ -696,43 +720,69 @@ def send_daily_employee_pending_digest(
     sent = 0
     skipped = 0
     candidates = 0
-    ttl = _ttl_until_next_3am_ist(_now_ist_dt())
+    ttl = _ttl_until_next_3am_ist(now_ist)
 
-    for user in users_qs:
+    for user in users_qs.iterator(chunk_size=500):
         candidates += 1
 
         if _is_on_leave_today(user) and not force:
             skipped += 1
+
             logger.info(
                 _safe_console_text(
-                    f"[PENDING DIGEST] Suppressed for user_id={getattr(user, 'id', '?')} because user is on leave today"
+                    f"[PENDING DIGEST] Suppressed for "
+                    f"user_id={getattr(user, 'id', '?')} because "
+                    f"user is on leave today"
                 )
             )
             continue
 
         if to_override:
-            recipients = _dedupe_emails([to_override])
+            recipients = _dedupe_emails(
+                [to_override]
+            )
         else:
-            recipients = _dedupe_emails([_display_user_email(user)])
+            recipients = _dedupe_emails(
+                [_display_user_email(user)]
+            )
 
-        recipients = [email for email in recipients if email]
+        recipients = [
+            email
+            for email in recipients
+            if email
+        ]
 
         if not recipients:
             skipped += 1
+
             logger.info(
                 _safe_console_text(
-                    f"[PENDING DIGEST] Skipped user_id={getattr(user, 'id', '?')} because no email exists"
+                    f"[PENDING DIGEST] Skipped "
+                    f"user_id={getattr(user, 'id', '?')} because "
+                    f"no email exists"
                 )
             )
             continue
 
+        claim_key = None
+
         if not force:
-            key = _emp_digest_key(day_iso, int(getattr(user, "id", 0) or 0))
-            if not _try_claim(key, ttl):
+            claim_key = _emp_digest_key(
+                day_iso,
+                int(getattr(user, "id", 0) or 0),
+            )
+
+            if not _try_claim(
+                claim_key,
+                ttl,
+            ):
                 skipped += 1
+
                 logger.info(
                     _safe_console_text(
-                        f"[PENDING DIGEST] Already sent or claimed user_id={getattr(user, 'id', '?')} day={day_iso}"
+                        f"[PENDING DIGEST] Already sent or claimed "
+                        f"user_id={getattr(user, 'id', '?')} "
+                        f"day={day_iso}"
                     )
                 )
                 continue
@@ -744,20 +794,33 @@ def send_daily_employee_pending_digest(
                 rows,
                 target_email=recipients[0],
             )
+
         except Exception:
             logger.exception(
                 _safe_console_text(
-                    f"[PENDING DIGEST] Guard row-strip failed for user_id={getattr(user, 'id', '?')}"
+                    f"[PENDING DIGEST] Guard row-strip failed for "
+                    f"user_id={getattr(user, 'id', '?')}"
                 )
             )
 
         if not rows and not send_even_if_empty and not force:
             skipped += 1
+
             logger.info(
                 _safe_console_text(
-                    f"[PENDING DIGEST] Skipped user_id={getattr(user, 'id', '?')} because no pending rows"
+                    f"[PENDING DIGEST] Skipped "
+                    f"user_id={getattr(user, 'id', '?')} because "
+                    f"no pending rows"
                 )
             )
+
+            # Release the cache claim because no email was actually sent.
+            if claim_key:
+                try:
+                    cache.delete(claim_key)
+                except Exception:
+                    pass
+
             continue
 
         try:
@@ -765,21 +828,33 @@ def send_daily_employee_pending_digest(
                 category=EMAIL_CATEGORY,
                 to=recipients,
             )
+
         except Exception:
             logger.exception(
                 _safe_console_text(
-                    f"[PENDING DIGEST] Recipient guard failed for user_id={getattr(user, 'id', '?')}"
+                    f"[PENDING DIGEST] Recipient guard failed for "
+                    f"user_id={getattr(user, 'id', '?')}"
                 )
             )
+
             filtered_to = recipients
 
         if not filtered_to:
             skipped += 1
+
             logger.info(
                 _safe_console_text(
-                    f"[PENDING DIGEST] Guard filtered all recipients for user_id={getattr(user, 'id', '?')}"
+                    f"[PENDING DIGEST] Guard filtered all recipients "
+                    f"for user_id={getattr(user, 'id', '?')}"
                 )
             )
+
+            if claim_key:
+                try:
+                    cache.delete(claim_key)
+                except Exception:
+                    pass
+
             continue
 
         subject = f"Your Pending Tasks - {day_iso}"
@@ -806,24 +881,38 @@ def send_daily_employee_pending_digest(
 
             logger.info(
                 _safe_console_text(
-                    f"[PENDING DIGEST] Sent employee digest to {filtered_to[0]} "
-                    f"user_id={getattr(user, 'id', '?')} items={len(rows)}"
+                    f"[PENDING DIGEST] Sent employee digest to "
+                    f"{filtered_to[0]} "
+                    f"user_id={getattr(user, 'id', '?')} "
+                    f"items={len(rows)}"
                 )
             )
+
             sent += 1
 
         except Exception as exc:
             skipped += 1
-            logger.error(
+
+            logger.exception(
                 _safe_console_text(
-                    f"[PENDING DIGEST] Email failure for user_id={getattr(user, 'id', '?')}: {exc}"
+                    f"[PENDING DIGEST] Email failure for "
+                    f"user_id={getattr(user, 'id', '?')}: {exc}"
                 )
             )
 
+            # Do not leave a false "already sent" marker after email failure.
+            if claim_key:
+                try:
+                    cache.delete(claim_key)
+                except Exception:
+                    pass
+
     logger.info(
         _safe_console_text(
-            f"[PENDING DIGEST] Completed at {_now_ist_dt():%Y-%m-%d %H:%M IST}: "
-            f"sent={sent}, skipped={skipped}, candidates={candidates}, "
+            f"[PENDING DIGEST] Completed at "
+            f"{_now_ist_dt():%Y-%m-%d %H:%M IST}: "
+            f"sent={sent}, skipped={skipped}, "
+            f"candidates={candidates}, "
             f"username_filter={'yes' if username else 'no'}, "
             f"to_override={'yes' if to_override else 'no'}"
         )
@@ -834,6 +923,7 @@ def send_daily_employee_pending_digest(
         "sent": sent,
         "skipped": skipped,
         "candidates": candidates,
+        "scheduler_skipped": False,
         "day": day_iso,
     }
 
@@ -848,12 +938,16 @@ def send_admin_all_pending_digest(
     force: bool = False,
 ) -> Dict[str, Any]:
     """
-    Sends one consolidated pending task email to admin.
+    Send one consolidated pending-task digest to the configured admin.
 
-    Rules:
+    Mandatory Holiday Calendar rule:
+    - Sundays and configured holidays are always skipped.
+    - force=True must never bypass the Holiday Calendar.
+    - force=True may bypass only idempotency and empty-row suppression.
+
+    Existing behavior retained:
     - Only planned_date <= today IST is included.
-    - Sundays and holidays are skipped unless force=True.
-    - Idempotency is enforced per target email per day unless force=True.
+    - Idempotency is enforced per target email and date unless force=True.
     """
     if not _email_notifications_enabled():
         logger.info(
@@ -861,53 +955,94 @@ def send_admin_all_pending_digest(
                 "[ADMIN DIGEST] Skipped: email notifications disabled"
             )
         )
+
         return {
             "ok": True,
+            "sent": 0,
             "skipped": True,
             "reason": "email_notifications_disabled",
         }
 
-    today = _today_ist()
+    now_ist = _now_ist_dt()
+    holiday_status = get_holiday_status(now_ist)
+    today = holiday_status["date"]
     day_iso = today.isoformat()
 
-    if not force and not _is_working_day_ist(today):
+    # IMPORTANT:
+    # This holiday check is mandatory and cannot be bypassed by force=True.
+    if holiday_status["is_off_day"]:
         logger.info(
             _safe_console_text(
-                f"[ADMIN DIGEST] Skipped: non-working day {day_iso}"
+                "Checklist reminder skipped - Official Holiday | "
+                f"Holiday detected: {day_iso} | "
+                f"Holiday Name: "
+                f"{holiday_status['holiday_name'] or 'Sunday'} | "
+                "Scheduler: send_admin_all_pending_digest"
             )
         )
+
         return {
             "ok": True,
+            "sent": 0,
             "skipped": True,
-            "reason": "non_working_day",
+            "reason": holiday_status["reason"],
             "day": day_iso,
+            "holiday_name": holiday_status["holiday_name"],
         }
 
-    default_admin = getattr(settings, "ADMIN_PENDING_DIGEST_TO", "")
-    target = (to or default_admin or "").strip()
+    default_admin = getattr(
+        settings,
+        "ADMIN_PENDING_DIGEST_TO",
+        "",
+    )
+
+    target = (
+        to
+        or default_admin
+        or ""
+    ).strip()
 
     if not target:
         logger.warning(
-            _safe_console_text("[ADMIN DIGEST] No admin recipient configured")
+            _safe_console_text(
+                "[ADMIN DIGEST] No admin recipient configured"
+            )
         )
+
         return {
             "ok": False,
+            "sent": 0,
             "skipped": True,
             "reason": "no_admin_recipient",
+            "day": day_iso,
         }
 
-    ttl = _ttl_until_next_3am_ist(_now_ist_dt())
+    ttl = _ttl_until_next_3am_ist(
+        now_ist
+    )
+
+    claim_key = None
 
     if not force:
-        key = _admin_digest_key(day_iso, target)
-        if not _try_claim(key, ttl):
+        claim_key = _admin_digest_key(
+            day_iso,
+            target,
+        )
+
+        if not _try_claim(
+            claim_key,
+            ttl,
+        ):
             logger.info(
                 _safe_console_text(
-                    f"[ADMIN DIGEST] Already sent or claimed for {target} day={day_iso}"
+                    f"[ADMIN DIGEST] Already sent or claimed "
+                    f"for {target} day={day_iso}"
                 )
             )
+
             return {
                 "ok": True,
+                "sent": 0,
                 "skipped": True,
                 "reason": "already_sent",
                 "day": day_iso,
@@ -920,19 +1055,32 @@ def send_admin_all_pending_digest(
             rows,
             target_email=target,
         )
+
     except Exception:
         logger.exception(
             _safe_console_text(
-                f"[ADMIN DIGEST] Guard row-strip failed for target={target}"
+                f"[ADMIN DIGEST] Guard row-strip failed "
+                f"for target={target}"
             )
         )
 
     if not rows and not force:
         logger.info(
-            _safe_console_text("[ADMIN DIGEST] No pending rows; skipped send")
+            _safe_console_text(
+                "[ADMIN DIGEST] No pending rows; skipped send"
+            )
         )
+
+        # Release claim because no email was sent.
+        if claim_key:
+            try:
+                cache.delete(claim_key)
+            except Exception:
+                pass
+
         return {
             "ok": True,
+            "sent": 0,
             "skipped": True,
             "reason": "empty",
             "day": day_iso,
@@ -943,29 +1091,46 @@ def send_admin_all_pending_digest(
             category=EMAIL_CATEGORY,
             to=[target],
         )
+
     except Exception:
         logger.exception(
             _safe_console_text(
-                f"[ADMIN DIGEST] Recipient guard failed for target={target}"
+                f"[ADMIN DIGEST] Recipient guard failed "
+                f"for target={target}"
             )
         )
+
         filtered_to = [target]
 
     if not filtered_to:
         logger.info(
             _safe_console_text(
-                "[ADMIN DIGEST] Guard filtered all recipients; no email sent"
+                "[ADMIN DIGEST] Guard filtered all recipients; "
+                "no email sent"
             )
         )
+
+        if claim_key:
+            try:
+                cache.delete(claim_key)
+            except Exception:
+                pass
+
         return {
             "ok": True,
+            "sent": 0,
             "skipped": True,
             "reason": "filtered_by_guard",
             "day": day_iso,
         }
 
-    subject = f"All Employees - Pending Tasks - {day_iso}"
-    title = f"All Employees - Pending Tasks ({day_iso})"
+    subject = (
+        f"All Employees - Pending Tasks - {day_iso}"
+    )
+
+    title = (
+        f"All Employees - Pending Tasks ({day_iso})"
+    )
 
     try:
         send_html_email(
@@ -986,25 +1151,38 @@ def send_admin_all_pending_digest(
 
         logger.info(
             _safe_console_text(
-                f"[ADMIN DIGEST] Sent consolidated pending digest to {filtered_to[0]} items={len(rows)}"
+                f"[ADMIN DIGEST] Sent consolidated pending digest "
+                f"to {filtered_to[0]} items={len(rows)}"
             )
         )
 
         return {
             "ok": True,
             "sent": 1,
+            "skipped": False,
             "items": len(rows),
             "to": filtered_to[0],
             "day": day_iso,
         }
 
     except Exception as exc:
-        logger.error(
-            _safe_console_text(f"[ADMIN DIGEST] Email failure: {exc}")
+        logger.exception(
+            _safe_console_text(
+                f"[ADMIN DIGEST] Email failure: {exc}"
+            )
         )
+
+        # Release claim because the send failed.
+        if claim_key:
+            try:
+                cache.delete(claim_key)
+            except Exception:
+                pass
+
         return {
             "ok": False,
             "sent": 0,
+            "skipped": False,
             "error": str(exc),
             "day": day_iso,
         }
