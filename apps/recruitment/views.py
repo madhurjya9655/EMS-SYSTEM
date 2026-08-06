@@ -7,7 +7,7 @@ from typing import Tuple
 from django.contrib import messages
 from django.contrib.auth import get_user_model
 from django.contrib.auth.decorators import login_required, user_passes_test
-from django.contrib.auth.mixins import LoginRequiredMixin
+from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
 from django.db import transaction
 from django.http import HttpResponse, HttpResponseForbidden
 from django.shortcuts import get_object_or_404, redirect, render
@@ -600,12 +600,29 @@ class EmployeeDetailView(LoginRequiredMixin, DetailView):
     context_object_name = "employee"
 
 
-class EmployeeUpdateView(LoginRequiredMixin, UpdateView):
+class EmployeeUpdateView(
+    LoginRequiredMixin,
+    UserPassesTestMixin,
+    UpdateView,
+):
     login_url = "login"
     model = Employee
     form_class = EmployeeForm
     template_name = "recruitment/employee_form.html"
     success_url = reverse_lazy("recruitment:employee_list")
+
+    def test_func(self):
+        return bool(
+            self.request.user.is_authenticated
+            and self.request.user.is_superuser
+        )
+
+    def handle_no_permission(self):
+        messages.error(
+            self.request,
+            "Only an administrator can edit employee status.",
+        )
+        return redirect("recruitment:employee_list")
 
     @transaction.atomic
     def form_valid(self, form):
@@ -618,27 +635,26 @@ class EmployeeUpdateView(LoginRequiredMixin, UpdateView):
         )
         will_be_active = bool(form.cleaned_data.get("is_active"))
 
+        if linked_user is not None and was_active and not will_be_active:
+            cleanup = soft_delete_all_tasks_for_employee(
+                linked_user,
+                deleted_by=self.request.user,
+                reason="Employee deactivated by admin",
+            )
+            messages.success(
+                self.request,
+                (
+                    f"Employee deactivated. Stopped "
+                    f"{cleanup['recurring_series_stopped']} recurring series "
+                    "and soft-deleted all pending assigned tasks."
+                ),
+            )
+
         response = super().form_valid(form)
 
-        if linked_user is not None:
-            if linked_user.is_active != will_be_active:
-                linked_user.is_active = will_be_active
-                linked_user.save(update_fields=["is_active"])
-
-            if was_active and not will_be_active:
-                cleanup = soft_delete_all_tasks_for_employee(
-                    linked_user,
-                    deleted_by=self.request.user,
-                    reason="Employee deactivated by admin",
-                )
-                messages.success(
-                    self.request,
-                    (
-                        f"Employee deactivated. Stopped "
-                        f"{cleanup['recurring_series_stopped']} recurring series "
-                        "and soft-deleted all assigned tasks."
-                    ),
-                )
+        if linked_user is not None and linked_user.is_active != will_be_active:
+            linked_user.is_active = will_be_active
+            linked_user.save(update_fields=["is_active"])
 
         return response
 

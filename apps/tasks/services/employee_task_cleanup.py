@@ -163,19 +163,50 @@ def _cleanup_known_task_models(
     reason: str,
 ) -> dict[str, int]:
     """
-    Soft-delete all known task rows assigned to the employee.
+    Soft-delete only unfinished tasks assigned to the employee.
 
-    Checklist rows are selected both directly through assign_to and through the
-    recurring master, so no occurrence remains visible after employee removal.
+    Completed and closed task history is preserved.
+
+    Checklist:
+      - clean Pending rows only
+
+    Delegation:
+      - clean Pending rows only
+
+    HelpTicket:
+      - clean Open and In Progress rows only
+
+    FMS:
+      - clean Pending rows only
     """
     checklist_qs = Checklist.objects.filter(
         models.Q(assign_to=user)
-        | models.Q(recurring_series__assign_to=user)
+        | models.Q(recurring_series__assign_to=user),
+        status="Pending",
+        is_deleted=False,
+        is_active=True,
     ).distinct()
 
-    delegation_qs = Delegation.objects.filter(assign_to=user)
-    help_ticket_qs = HelpTicket.objects.filter(assign_to=user)
-    fms_qs = FMS.objects.filter(assign_to=user)
+    delegation_qs = Delegation.objects.filter(
+        assign_to=user,
+        status="Pending",
+        is_deleted=False,
+        is_active=True,
+    )
+
+    help_ticket_qs = HelpTicket.objects.filter(
+        assign_to=user,
+        status__in=["Open", "In Progress"],
+        is_deleted=False,
+        is_active=True,
+    )
+
+    fms_qs = FMS.objects.filter(
+        assign_to=user,
+        status="Pending",
+        is_deleted=False,
+        is_active=True,
+    )
 
     return {
         "checklist": _soft_delete_queryset(
@@ -217,11 +248,13 @@ def _cleanup_other_assigned_models(
     reason: str,
 ) -> tuple[dict[str, int], list[str]]:
     """
-    Best-effort coverage for other installed models that use an `assign_to`
-    ForeignKey/OneToOneField pointing to the auth user model.
+    Report other installed models that use an `assign_to` relation.
 
-    Only models with an existing soft-delete field are modified. Models with no
-    supported lifecycle field are reported instead of being physically deleted.
+    Unknown models are not modified automatically because their status fields
+    and completed-history rules may be different.
+
+    This prevents completed or important business records in another
+    application from being hidden accidentally.
     """
     known_models = {
         Checklist,
@@ -231,7 +264,6 @@ def _cleanup_other_assigned_models(
         FMS,
     }
 
-    changed: dict[str, int] = {}
     unsupported: list[str] = []
 
     for model in apps.get_models():
@@ -246,43 +278,35 @@ def _cleanup_other_assigned_models(
         if not _is_fk_to_user(field):
             continue
 
-        values = _soft_delete_values(
-            model,
-            deleted_by=deleted_by,
-            reason=reason,
-        )
-
-        label = model._meta.label
-
-        if not values:
-            unsupported.append(label)
-            logger.warning(
-                "Assigned-task model %s has assign_to but no supported "
-                "soft-delete fields.",
-                label,
-            )
-            continue
-
         try:
-            count = int(
+            has_assigned_rows = (
                 model._default_manager
                 .filter(assign_to=user)
-                .update(**values)
-                or 0
+                .exists()
             )
         except Exception:
             logger.exception(
-                "Could not soft-delete assigned rows for model %s and user %s",
-                label,
+                "Could not inspect assigned rows for model %s and user %s",
+                model._meta.label,
                 user.pk,
             )
-            unsupported.append(label)
+            unsupported.append(model._meta.label)
             continue
 
-        if count:
-            changed[label] = count
+        if not has_assigned_rows:
+            continue
 
-    return changed, unsupported
+        label = model._meta.label
+        unsupported.append(label)
+
+        logger.warning(
+            "Model %s has rows assigned to inactive user %s, "
+            "but was not automatically modified.",
+            label,
+            user.pk,
+        )
+
+    return {}, unsupported
 
 
 @transaction.atomic
@@ -299,12 +323,13 @@ def soft_delete_all_tasks_for_employee(
 
     Effects:
       1. Stops every recurring master assigned to the employee.
-      2. Soft-deletes every Checklist occurrence assigned to the employee.
-      3. Soft-deletes Delegation, HelpTicket and FMS rows.
-      4. Soft-deletes rows in other installed models that use `assign_to`
-         and expose a supported soft-delete field.
-      5. Does not physically delete task rows.
-      6. Does not reassign tasks to another employee.
+      2. Soft-deletes Pending Checklist occurrences assigned to the employee.
+      3. Soft-deletes Pending Delegation and FMS rows.
+      4. Soft-deletes Open and In Progress HelpTicket rows.
+      5. Preserves Completed and Closed task history.
+      6. Reports unknown models using `assign_to` without changing them.
+      7. Does not physically delete task rows.
+      8. Does not reassign tasks to another employee.
     """
     if user is None or not getattr(user, "pk", None):
         raise ValueError("A saved employee user is required.")

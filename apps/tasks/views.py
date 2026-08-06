@@ -1363,6 +1363,7 @@ def _active_checklist_action_queryset(request, *, is_admin: bool):
     today = timezone.localdate()
 
     filters = {
+        "assign_to__is_active": True,
         "status": "Pending",
         "planned_date__date__lte": today,
     }
